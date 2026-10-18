@@ -457,12 +457,13 @@ export class Server {
       this.id,
       hydrate(
         "server",
-        await this.#collection.client.api.patch(
+        // the template path also matches role edits, which return a Role
+        (await this.#collection.client.api.patch(
           `/servers/${this.id as ""}/roles/ranks`,
           {
             ranks: roleIds,
           },
-        ),
+        )) as APIServer,
         this.#collection.client,
         false,
       ),
@@ -550,7 +551,7 @@ export class Server {
    * @param user User
    */
   async kickUser(user: string | User | ServerMember): Promise<void> {
-    return await this.#collection.client.api.delete(
+    await this.#collection.client.api.delete(
       `/servers/${this.id as ""}/members/${
         typeof user === "string"
           ? user
@@ -567,7 +568,7 @@ export class Server {
    */
   async unbanUser(user: string | User): Promise<void> {
     const userId = user instanceof User ? user.id : user;
-    return await this.#collection.client.api.delete(
+    await this.#collection.client.api.delete(
       `/servers/${this.id as ""}/bans/${userId}`,
     );
   }

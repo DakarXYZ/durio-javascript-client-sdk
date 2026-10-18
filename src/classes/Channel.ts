@@ -7,6 +7,7 @@ import type {
   Member as APIMember,
   Message as APIMessage,
   User as APIUser,
+  DataCreateInvite,
   DataEditChannel,
   DataMessageSearch,
   DataMessageSend,
@@ -710,11 +711,13 @@ export class Channel {
   /**
    * Create an invite to the channel
    * @requires `TextChannel`
+   * @param options Invite options (API 0.16: maximum uses, expiry)
    * @returns Newly created invite code
    */
-  async createInvite(): Promise<Invite> {
+  async createInvite(options: DataCreateInvite = {}): Promise<Invite> {
     return await this.#collection.client.api.post(
       `/channels/${this.id as ""}/invites`,
+      options,
     );
   }
 
