@@ -11,6 +11,7 @@ import { decodeTime } from "ulid";
 
 import type { Client } from "../Client.js";
 import type { MessageCollection } from "../collections/MessageCollection.js";
+import type { MessageE2ee } from "../e2ee/decryptor.js";
 import { MessageFlags } from "../hydration/message.js";
 
 import type { Channel } from "./Channel.js";
@@ -251,6 +252,33 @@ export class Message {
   }
 
   /**
+   * Whether this message is end-to-end encrypted (dur.io)
+   */
+  get isEncrypted(): boolean {
+    return !!this.#collection.getUnderlyingObject(this.id).encrypted;
+  }
+
+  /**
+   * Decryption state of an encrypted message; `content` and `attachments` are the
+   * payload's once it is `ok`, empty otherwise (WEB-05)
+   */
+  get e2ee(): MessageE2ee | undefined {
+    const message = this.#collection.getUnderlyingObject(this.id);
+    if (!message.encrypted) return;
+    return message.e2ee ?? { state: "pending" };
+  }
+
+  /**
+   * Resolves once an encrypted message is decrypted or known not to be (at most
+   * `timeoutMs`); at once for other messages
+   * @param timeoutMs Longest wait
+   */
+  whenDecrypted(timeoutMs = 10_000): Promise<void> {
+    if (!this.isEncrypted) return Promise.resolve();
+    return this.#collection.client.e2ee.whenDecrypted(this.id, timeoutMs);
+  }
+
+  /**
    * Get the username for this message
    */
   get username(): string | undefined {
@@ -330,6 +358,12 @@ export class Message {
    * @param data Message edit route data
    */
   async edit(data: DataEditMessage): Promise<APIMessage> {
+    // encrypted channels: the edit is encrypted too (WEB-05)
+    const e2ee = this.#collection.client.e2ee;
+    if (this.channel && e2ee.isEncrypted(this.channel)) {
+      return await e2ee.editMessage(this, data.content ?? "");
+    }
+
     return await this.#collection.client.api.patch(
       `/channels/${this.channelId as ""}/messages/${this.id as ""}`,
       data,

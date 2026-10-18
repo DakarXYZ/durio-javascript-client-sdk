@@ -41,6 +41,8 @@ export class MessageCollection extends ClassCollection<
     } else {
       const instance = new Message(this, id);
       this.create(id, "message", instance, this.client, data);
+      // stored as pending, decrypted asynchronously (dur.io, WEB-05)
+      if (data.encrypted) this.client.e2ee.decryptor.queue(id);
       if (isNew) this.client.emit("messageCreate", instance);
       return instance;
     }

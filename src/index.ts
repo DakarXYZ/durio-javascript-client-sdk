@@ -10,3 +10,18 @@ export { ServerFlags } from "./hydration/server.js";
 export { UserBadges, UserFlags } from "./hydration/user.js";
 export * from "./lib/regex.js";
 export * from "./permissions/definitions.js";
+export { E2ee } from "./e2ee/E2ee.js";
+export type { E2eeEvent, E2eeStatus } from "./e2ee/E2ee.js";
+export type {
+  E2eeFailureReason,
+  E2eeMessageState,
+  MessageE2ee,
+} from "./e2ee/decryptor.js";
+export type { E2eePinStore } from "./e2ee/channels.js";
+export type {
+  E2eeEncryptedFile,
+  E2eePayloadAttachment,
+  E2eePayloadThumbnail,
+} from "./e2ee/payload.js";
+export { MessageSendError } from "./e2ee/outbox.js";
+export * from "./e2ee/provider.js";

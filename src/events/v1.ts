@@ -208,7 +208,18 @@ type ServerMessage =
   | {
       type: "UserSlowmodes";
       slowmodes: UserSlowmodes[];
-    };
+    }
+  // dur.io E2EE: doorbells only, the content is fetched over HTTP (C3)
+  | {
+      type: "E2eeToDevice";
+      id: string;
+      recipient_device: string;
+      sender: string;
+      sender_device: string;
+      event_type: string;
+    }
+  | { type: "E2eeDeviceListUpdate"; user: string }
+  | { type: "E2eeKeysLow"; device: string; count: number };
 
 /**
  * Policy change type
@@ -341,6 +352,9 @@ export async function handleEvent(
         }
       });
 
+      // dur.io: pin encrypted channels, reconnect the crypto core (mailbox, keys)
+      client.e2ee.onReady(event.channels);
+
       if (client.options.syncUnreads) {
         await client.channelUnreads.sync();
       }
@@ -405,16 +419,29 @@ export async function handleEvent(
           channelId: event.channel,
         };
 
+        const changes = hydrate(
+          "message",
+          { ...event.data, channel: event.channel },
+          client,
+          false,
+        );
+
+        // dur.io: an encrypted message keeps what it shows until the new version is
+        // decrypted; the open placeholder never replaces it
+        const encrypted = !!(event.data.encrypted ?? previousMessage.encrypted);
+        if (encrypted) {
+          delete changes.content;
+          delete changes.attachments;
+          delete changes.embeds;
+          delete changes.mentionIds;
+        }
+
         client.messages.updateUnderlyingObject(event.id, {
-          ...hydrate(
-            "message",
-            { ...event.data, channel: event.channel },
-            client,
-            false,
-          ),
+          ...changes,
           editedAt: new Date(),
         });
 
+        if (event.data.encrypted) client.e2ee.decryptor.queue(event.id);
         client.emit("messageUpdate", message, previousMessage);
       }
       break;
@@ -565,6 +592,7 @@ export async function handleEvent(
         }
 
         client.channels.updateUnderlyingObject(event.id, changes);
+        client.e2ee.observeChannel(event.data, event.id);
         client.emit("channelUpdate", channel, previousChannel);
       }
       break;
@@ -582,6 +610,7 @@ export async function handleEvent(
       if (channel) {
         if (!channel.recipientIds.has(event.user)) {
           channel.recipientIds.add(event.user);
+          client.e2ee.membersChanged(channel);
         } else if (!client.channels.isPartial(event.id)) {
           return;
         }
@@ -599,6 +628,7 @@ export async function handleEvent(
       if (channel) {
         if (channel.recipientIds.has(event.user)) {
           channel.recipientIds.delete(event.user);
+          client.e2ee.membersChanged(channel);
         } else if (!client.channels.isPartial(event.id)) {
           return;
         }
@@ -1048,6 +1078,19 @@ export async function handleEvent(
     }
     case "UserMoveVoiceChannel": {
       // todo
+      break;
+    }
+    case "E2eeToDevice": {
+      // bonfire sends it only to the recipient device's socket
+      client.e2ee.onToDevice();
+      break;
+    }
+    case "E2eeDeviceListUpdate": {
+      client.e2ee.onDeviceListUpdate(event.user);
+      break;
+    }
+    case "E2eeKeysLow": {
+      client.e2ee.onKeysLow();
       break;
     }
     case "UserSlowmodes": {

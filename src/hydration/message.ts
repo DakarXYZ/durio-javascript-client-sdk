@@ -7,6 +7,7 @@ import { File } from "../classes/File.js";
 import { MessageWebhook } from "../classes/Message.js";
 import { MessageEmbed } from "../classes/MessageEmbed.js";
 import { SystemMessage } from "../classes/SystemMessage.js";
+import type { EncryptedEnvelope, MessageE2ee } from "../e2ee/decryptor.js";
 import type { Merge } from "../lib/merge.js";
 
 import type { Hydrate } from "./index.js";
@@ -30,6 +31,10 @@ export type HydratedMessage = {
   masquerade?: Masquerade;
   pinned?: boolean;
   flags?: MessageFlags;
+  /** Envelope of an end-to-end encrypted message (dur.io) */
+  encrypted?: EncryptedEnvelope;
+  /** Decryption state; text and attachments come from the payload (WEB-05) */
+  e2ee?: MessageE2ee;
 };
 
 export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
@@ -52,14 +57,22 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
       message.webhook
         ? new MessageWebhook(ctx as Client, message.webhook, message.author)
         : undefined,
-    content: (message) => message.content!,
+    // an encrypted message's open `content` is the server's placeholder: never shown
+    content: (message) => (message.encrypted ? undefined! : message.content!),
     systemMessage: (message, ctx) =>
       SystemMessage.from(ctx as Client, message, message.system!),
+    // encrypted blobs: the real files come from the payload
     attachments: (message, ctx) =>
-      message.attachments!.map((file) => new File(ctx as Client, file)),
+      message.encrypted
+        ? undefined!
+        : message.attachments!.map((file) => new File(ctx as Client, file)),
     editedAt: (message) => new Date(message.edited!),
     embeds: (message, ctx) =>
-      message.embeds!.map((embed) => MessageEmbed.from(ctx as Client, embed)),
+      message.encrypted
+        ? undefined!
+        : message.embeds!.map((embed) =>
+            MessageEmbed.from(ctx as Client, embed),
+          ),
     mentionIds: (message) => message.mentions!,
     roleMentionIds: (message) => message.role_mentions!,
     replyIds: (message) => message.replies!,
@@ -76,6 +89,8 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
     masquerade: (message) => message.masquerade!,
     pinned: (message) => message.pinned!,
     flags: (message) => message.flags!,
+    encrypted: (message) => message.encrypted ?? undefined!,
+    e2ee: () => undefined!,
   },
   initialHydration: () => ({
     reactions: new ReactiveMap(),

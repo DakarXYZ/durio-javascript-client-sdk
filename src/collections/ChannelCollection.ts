@@ -47,6 +47,8 @@ export class ChannelCollection extends ClassCollection<
     } else {
       const instance = new Channel(this, id);
       this.create(id, "channel", instance, this.client, data);
+      // pin encrypted DMs and groups (dur.io, T18)
+      this.client.e2ee.observeChannel(data, id);
       if (isNew) this.client.emit("channelCreate", instance);
       return instance;
     }

@@ -60,6 +60,8 @@ export abstract class SystemMessage {
         return new MessagePinnedSystemMessage(client, message);
       case "call_started":
         return new CallStartedSystemMessage(client, parent, message);
+      case "encryption_enabled":
+        return new EncryptionEnabledSystemMessage(client, message);
       default:
         return new TextSystemMessage(client, {
           type: "text",
@@ -314,6 +316,35 @@ export class CallStartedSystemMessage extends SystemMessage {
 
   /**
    * User that started the call
+   */
+  get by(): User | undefined {
+    return this.client!.users.get(this.byId);
+  }
+}
+
+/**
+ * Encryption Enabled System Message (dur.io, C12)
+ */
+export class EncryptionEnabledSystemMessage extends SystemMessage {
+  readonly byId: string;
+
+  /**
+   * Construct System Message
+   * @param client Client
+   * @param systemMessage System Message
+   */
+  constructor(
+    client: Client,
+    systemMessage: APISystemMessage & {
+      type: "encryption_enabled";
+    },
+  ) {
+    super(client, systemMessage.type);
+    this.byId = systemMessage.by;
+  }
+
+  /**
+   * User that enabled encryption
    */
   get by(): User | undefined {
     return this.client!.users.get(this.byId);

@@ -27,6 +27,7 @@ import { ServerCollection } from "./collections/ServerCollection.js";
 import { ServerMemberCollection } from "./collections/ServerMemberCollection.js";
 import { SessionCollection } from "./collections/SessionCollection.js";
 import { UserCollection } from "./collections/UserCollection.js";
+import { E2ee } from "./e2ee/E2ee.js";
 import {
   ConnectionState,
   EventClient,
@@ -189,6 +190,9 @@ export class Client extends AsyncEventEmitter<Events> {
   readonly sessions;
   readonly users;
 
+  /** End-to-end encryption of DMs and groups (dur.io) */
+  readonly e2ee: E2ee;
+
   readonly api: API;
   readonly options: ClientOptions;
   readonly events: EventClient<1>;
@@ -281,6 +285,7 @@ export class Client extends AsyncEventEmitter<Events> {
     this.serverMembers = new ServerMemberCollection(this);
     this.sessions = new SessionCollection(this);
     this.users = new UserCollection(this);
+    this.e2ee = new E2ee(this);
 
     this.events = new EventClient(1, "json", this.options);
     this.events.on("error", (error) =>
@@ -424,6 +429,8 @@ export class Client extends AsyncEventEmitter<Events> {
    * This function prepares the client for disposal by removing all event listeners and killing the events socket.
    */
   async logout(): Promise<void> {
+    // sign-out: the crypto store of this device goes with the session (WEB-12)
+    await this.e2ee.uninstall({ destroy: true });
     await this.api.post("/auth/session/logout");
     this.events.removeAllListeners();
     this.removeAllListeners();

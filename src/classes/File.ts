@@ -39,13 +39,22 @@ export class File {
   readonly size?: number;
 
   /**
+   * End-to-end encrypted attachment (dur.io): there is no usable URL, the client
+   * downloads and decrypts it (`client.e2ee.decryptFile`)
+   */
+  readonly e2ee: boolean;
+
+  /**
    * Construct File
    * @param client Client
    * @param file File
    */
   constructor(
     client: Client,
-    file: (Pick<APIFile, "_id" | "tag" | "metadata"> & Partial<APIFile>) | File,
+    file:
+      | (Pick<APIFile, "_id" | "tag" | "metadata"> &
+          Partial<APIFile> & { e2ee?: boolean })
+      | File,
   ) {
     this.#client = client;
     if (file instanceof File) {
@@ -55,6 +64,7 @@ export class File {
       this.metadata = file.metadata;
       this.contentType = file.contentType;
       this.size = file.size;
+      this.e2ee = file.e2ee;
     } else {
       this.id = file._id;
       this.tag = file.tag;
@@ -62,6 +72,7 @@ export class File {
       this.metadata = file.metadata;
       this.contentType = file.content_type;
       this.size = file.size;
+      this.e2ee = !!file.e2ee;
     }
   }
 
@@ -80,6 +91,7 @@ export class File {
    * Preview URL for the file
    */
   get previewUrl(): string {
+    if (this.e2ee) return undefined!;
     return `${this.#client.configuration?.features.autumn.url}/${
       this.tag
     }/${this.id}`;
@@ -89,6 +101,7 @@ export class File {
    * Original download URL for the file
    */
   get originalUrl(): string {
+    if (this.e2ee) return undefined!;
     return `${this.#client.configuration?.features.autumn.url}/${
       this.tag
     }/${this.id}/original`;
@@ -123,7 +136,7 @@ export class File {
    */
   createFileURL(forceAnimation?: boolean): string | undefined {
     const autumn = this.#client.configuration?.features.autumn;
-    if (!autumn?.enabled) return;
+    if (!autumn?.enabled || this.e2ee) return;
 
     let query = "";
     if (

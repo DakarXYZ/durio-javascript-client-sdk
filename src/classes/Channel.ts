@@ -7,6 +7,7 @@ import type {
   Member as APIMember,
   Message as APIMessage,
   User as APIUser,
+  ChannelEncryption,
   DataCreateInvite,
   DataEditChannel,
   DataMessageSearch,
@@ -18,6 +19,9 @@ import type { APIRoutes } from "stoat-api";
 import { decodeTime, ulid } from "ulid";
 
 import { ChannelCollection } from "../collections/index.js";
+import { sendWithRetry } from "../e2ee/outbox.js";
+import type { E2eePayloadAttachment } from "../e2ee/payload.js";
+import { E2eeError } from "../e2ee/provider.js";
 import { UserSlowmodes } from "../events/v1.js";
 import { hydrate } from "../hydration/index.js";
 import {
@@ -259,6 +263,36 @@ export class Channel {
    */
   get rolePermissions(): Record<string, { a: bigint; d: bigint }> | undefined {
     return this.#collection.getUnderlyingObject(this.id).rolePermissions;
+  }
+
+  /**
+   * Encryption of a DM or group as the server reports it (dur.io)
+   */
+  get encryption(): ChannelEncryption | undefined {
+    return this.#collection.getUnderlyingObject(this.id).encryption;
+  }
+
+  /**
+   * Whether messages here are end-to-end encrypted: the server says so, or this client
+   * saw it encrypted before (pinned locally, never undone; T18)
+   */
+  get isEncrypted(): boolean {
+    return this.#collection.client.e2ee.isEncrypted(this);
+  }
+
+  /**
+   * Pinned as encrypted, but the server now sends it without encryption (a warning)
+   */
+  get encryptionDowngraded(): boolean {
+    return this.#collection.client.e2ee.isDowngraded(this);
+  }
+
+  /**
+   * Turn on end-to-end encryption: irreversible (requires `ManageChannel`)
+   * @requires `DirectMessage`, `Group`
+   */
+  async enableEncryption(): Promise<void> {
+    await this.#collection.client.e2ee.enableEncryption(this);
   }
 
   /**
@@ -535,26 +569,41 @@ export class Channel {
   async sendMessage(
     data: string | DataMessageSend,
     idempotencyKey: string = ulid(),
+    options: {
+      /** Encrypted attachments of an encrypted channel (dur.io, WEB-06) */
+      attachments?: E2eePayloadAttachment[];
+      /** An earlier attempt already sent this key: a duplicate answer means "sent" */
+      resend?: boolean;
+    } = {},
   ): Promise<Message> {
     const msg: DataMessageSend =
       typeof data === "string" ? { content: data } : data;
 
-    // Mark as silent message
+    // Mark as silent message (flags stay open in encrypted channels)
     if (msg.content?.startsWith("@silent ")) {
       msg.content = msg.content.substring(8);
       msg.flags ||= 1;
       msg.flags |= 1;
     }
 
-    const message = await this.#collection.client.api.post(
-      `/channels/${this.id as ""}/messages`,
-      msg,
-      {
-        headers: {
-          "Idempotency-Key": idempotencyKey,
-        },
-      },
-    );
+    const client = this.#collection.client;
+    // dur.io: encrypted channels never get plaintext; every send goes through the
+    // outbox (same nonce and Idempotency-Key on retries, lookup by nonce; block 5E)
+    const message = client.e2ee.isEncrypted(this)
+      ? await client.e2ee.sendMessage(this, msg, idempotencyKey, options)
+      : (
+          await sendWithRetry(
+            client,
+            this.id,
+            { ...msg, nonce: msg.nonce ?? idempotencyKey },
+            {
+              nonce: msg.nonce ?? idempotencyKey,
+              idempotencyKey,
+              resend: options.resend,
+              selfId: client.user?.id,
+            },
+          )
+        ).message;
 
     return this.#collection.client.messages.getOrCreate(
       message._id,
@@ -640,6 +689,19 @@ export class Channel {
   }
 
   /**
+   * The server cannot search encrypted text (pins still work, C18)
+   * @param params Search parameters
+   */
+  #assertSearchable(params: Omit<DataMessageSearch, "include_users">) {
+    if (params.query && this.isEncrypted) {
+      throw new E2eeError(
+        "SearchUnavailableInEncryptedChannel",
+        "search is not available in encrypted channels",
+      );
+    }
+  }
+
+  /**
    * Search for messages
    * @param params Message searching route data
    * @requires `SavedMessages`, `DirectMessage`, `Group`, `TextChannel`
@@ -648,6 +710,7 @@ export class Channel {
   async search(
     params: Omit<DataMessageSearch, "include_users">,
   ): Promise<Message[]> {
+    this.#assertSearchable(params);
     const messages = (await this.#collection.client.api.post(
       `/channels/${this.id as ""}/search`,
       params,
@@ -673,6 +736,7 @@ export class Channel {
     users: User[];
     members: ServerMember[] | undefined;
   }> {
+    this.#assertSearchable(params);
     const data = (await this.#collection.client.api.post(
       `/channels/${this.id as ""}/search`,
       {
