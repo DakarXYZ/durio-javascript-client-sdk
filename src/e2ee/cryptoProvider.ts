@@ -2,18 +2,32 @@
 // Q29). The SDK takes no dependency on the package: the app creates the worker and
 // `StoatCrypto` (Vite has to see `new Worker(new URL(...))` in its own code) and passes
 // it in; this adapter only needs its shape.
-import type {
-  E2eeChannelSettings,
-  E2eeDecryptResult,
-  E2eeDevice,
-  E2eeEncryptedBlob,
-  E2eeEncryptedBytes,
-  E2eeIncomingMessage,
-  E2eeOutgoingRequest,
-  E2eeProvider,
-  E2eeRequestKind,
-  E2eeServerLimits,
-  E2eeToDeviceResult,
+import {
+  type E2eeBackupRestore,
+  type E2eeBackupStatus,
+  type E2eeChannelSettings,
+  type E2eeDecryptResult,
+  type E2eeDevice,
+  type E2eeEncryptedBlob,
+  type E2eeEncryptedBytes,
+  E2eeError,
+  type E2eeIdentityKeys,
+  type E2eeIncomingMessage,
+  type E2eeKeyExport,
+  type E2eeKeyImportResult,
+  type E2eeOutgoingRequest,
+  type E2eeProvider,
+  type E2eeRecoveryKeyCheck,
+  type E2eeRecoverySecrets,
+  type E2eeRecoverySetup,
+  type E2eeRequestKind,
+  type E2eeSasEmoji,
+  type E2eeSasFlow,
+  type E2eeServerLimits,
+  type E2eeSettableTrust,
+  type E2eeToDeviceResult,
+  type E2eeUndeliveredDevice,
+  e2eeErrorCode,
 } from "./provider.js";
 
 export * from "./provider.js";
@@ -50,6 +64,36 @@ export interface StoatCryptoLike {
   encrypt(channelId: string, payloadJson: string): Promise<string>;
   decryptBatch(messages: E2eeIncomingMessage[]): Promise<E2eeDecryptResult[]>;
   devices(userId: string): Promise<E2eeDevice[]>;
+  setDeviceTrust(
+    userId: string,
+    deviceId: string,
+    trust: E2eeSettableTrust,
+  ): Promise<void>;
+  identityKeys(): Promise<E2eeIdentityKeys>;
+  undeliveredDevices(): Promise<E2eeUndeliveredDevice[]>;
+  requestVerification(userId: string, deviceId: string): Promise<E2eeSasFlow>;
+  verification(flowId: string): Promise<E2eeSasFlow | null>;
+  verifications(): Promise<E2eeSasFlow[]>;
+  sasEmojiTable(): Promise<E2eeSasEmoji[]>;
+  createRecovery(passphrase?: Uint8Array): Promise<E2eeRecoverySetup>;
+  rotateBackup(): Promise<E2eeRecoverySetup>;
+  unlockBackup(
+    input: Uint8Array,
+    secrets: E2eeRecoverySecrets,
+  ): Promise<string>;
+  restoreBackup(keysBody: string): Promise<E2eeBackupRestore>;
+  backupStatus(): Promise<E2eeBackupStatus>;
+  disableBackup(): Promise<void>;
+  recoveryKeyCheck(input: Uint8Array): Promise<E2eeRecoveryKeyCheck>;
+  exportRoomKeys(
+    passphrase: Uint8Array,
+    channelIds?: string[],
+  ): Promise<E2eeKeyExport>;
+  importRoomKeys(
+    file: string,
+    passphrase: Uint8Array,
+  ): Promise<E2eeKeyImportResult>;
+  debugReport(): Promise<string>;
   encryptBlob(blob: Blob): Promise<E2eeEncryptedBlob>;
   encryptAttachment(data: Uint8Array): Promise<E2eeEncryptedBytes>;
   decryptBlob(
@@ -98,6 +142,33 @@ export function createStoatCryptoProvider(
     decryptMany: (messages) =>
       messages.length ? crypto.decryptBatch(messages) : Promise.resolve([]),
     devices: (userId) => crypto.devices(userId),
+    setDeviceTrust(userId, deviceId, trust) {
+      // `Verified` comes from SAS only (review O-3), whatever the caller typed
+      if (trust !== "Unverified" && trust !== "Blocked")
+        return Promise.reject(
+          new E2eeError("InvalidInput", "trust is set by verification only"),
+        );
+      return crypto.setDeviceTrust(userId, deviceId, trust);
+    },
+    identityKeys: () => crypto.identityKeys(),
+    undeliveredDevices: () => crypto.undeliveredDevices(),
+    requestVerification: (userId, deviceId) =>
+      crypto.requestVerification(userId, deviceId),
+    verification: (flowId) => crypto.verification(flowId),
+    verifications: () => crypto.verifications(),
+    sasEmojiTable: () => crypto.sasEmojiTable(),
+    createRecovery: (passphrase) => crypto.createRecovery(passphrase),
+    rotateBackup: () => crypto.rotateBackup(),
+    unlockBackup: (input, secrets) => crypto.unlockBackup(input, secrets),
+    restoreBackup: (body) => crypto.restoreBackup(body),
+    backupStatus: () => crypto.backupStatus(),
+    disableBackup: () => crypto.disableBackup(),
+    recoveryKeyCheck: (input) => crypto.recoveryKeyCheck(input),
+    exportRoomKeys: (passphrase, channelIds) =>
+      crypto.exportRoomKeys(passphrase, channelIds),
+    importRoomKeys: (file, passphrase) =>
+      crypto.importRoomKeys(file, passphrase),
+    debugReport: () => crypto.debugReport(),
     encryptBlob: (blob) => crypto.encryptBlob(blob),
     encryptAttachment: (data) => crypto.encryptAttachment(data),
     decryptBlob: (blob, fileJson, contentType) =>
@@ -116,10 +187,37 @@ export function createStoatCryptoProvider(
       if (terminated) return;
       try {
         await crypto.close();
-        if (account.accountKey) await crypto.destroyStore(account.accountKey);
+        const accountKey = account.accountKey;
+        if (accountKey)
+          await retryWhileLocked(() => crypto.destroyStore(accountKey));
       } finally {
         terminate();
       }
     },
   };
+}
+
+/** Delays between attempts of a store deletion that was blocked (WEB-12) */
+export const DESTROY_RETRY_MS = [100, 400, 1_500];
+
+/**
+ * Run a store deletion again while it is blocked: `indexedDB.deleteDatabase` waits
+ * for connections still open (a machine being closed, another window letting go),
+ * and the worker reports that as `StoreLocked`
+ * @param destroy Deletion
+ * @param delays Waits between attempts
+ */
+export async function retryWhileLocked(
+  destroy: () => Promise<void>,
+  delays: readonly number[] = DESTROY_RETRY_MS,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await destroy();
+    } catch (e) {
+      if (e2eeErrorCode(e) !== "StoreLocked" || attempt >= delays.length)
+        throw e;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
 }

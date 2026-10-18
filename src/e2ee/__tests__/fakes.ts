@@ -12,7 +12,12 @@ import type {
   E2eeIncomingMessage,
   E2eeOutgoingRequest,
   E2eeProvider,
+  E2eeRecoverySecrets,
   E2eeRequestKind,
+  E2eeRoomKey,
+  E2eeSasFlow,
+  E2eeSasState,
+  E2eeSettableTrust,
   E2eeToDeviceResult,
 } from "../provider.js";
 
@@ -207,6 +212,162 @@ export class FakeProvider implements E2eeProvider {
     );
   }
 
+  // ------------------------------------------------- devices, SAS, backup
+
+  trustCalls: string[] = [];
+  flows = new Map<string, FakeSasFlow>();
+  /** Secrets as the core saw them (copies, before the caller wiped its own) */
+  secretsSeen: string[] = [];
+  backup = {
+    enabled: false,
+    version: null as string | null,
+    created: 0,
+    restoreBatches: 2,
+  };
+  /** Code `importRoomKeys` / `unlockBackup` throw */
+  importThrows?: string;
+  unlockThrows?: string;
+  importedKeys: E2eeRoomKey[] = [];
+
+  async setDeviceTrust(
+    userId: string,
+    deviceId: string,
+    trust: E2eeSettableTrust,
+  ) {
+    this.trustCalls.push(`${userId}/${deviceId}:${trust}`);
+  }
+
+  async identityKeys() {
+    return {
+      curve25519: "curve",
+      ed25519: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq",
+    };
+  }
+
+  async undeliveredDevices() {
+    return [];
+  }
+
+  async requestVerification(userId: string, deviceId: string) {
+    const flow = new FakeSasFlow(`F${this.flows.size + 1}`, userId, deviceId);
+    this.flows.set(flow.flowId, flow);
+    return flow;
+  }
+
+  async verification(flowId: string) {
+    return this.flows.get(flowId) ?? null;
+  }
+
+  async verifications() {
+    return [...this.flows.values()];
+  }
+
+  async sasEmojiTable() {
+    return Array.from({ length: 64 }, (_, index) => ({
+      index,
+      symbol: String.fromCodePoint(0x1f400 + index),
+      description: `E${index}`,
+    }));
+  }
+
+  #request(kind: E2eeRequestKind): E2eeOutgoingRequest {
+    this.backup.created++;
+    return {
+      id: `b${this.backup.created}`,
+      kind,
+      method: "POST",
+      path: "/e2ee/backup/version",
+      body: '{"algorithm":"m.megolm_backup.v1.curve25519-aes-sha2"}',
+    };
+  }
+
+  async createRecovery(passphrase?: Uint8Array) {
+    if (passphrase) this.secretsSeen.push(new TextDecoder().decode(passphrase));
+    return {
+      recoveryKey: "EsTc 1234 abcd",
+      request: this.#request("BackupVersionCreate"),
+    };
+  }
+
+  async rotateBackup() {
+    return { recoveryKey: null, request: this.#request("BackupVersionCreate") };
+  }
+
+  async unlockBackup(input: Uint8Array, secrets: E2eeRecoverySecrets) {
+    this.secretsSeen.push(new TextDecoder().decode(input));
+    this.calls.push(`unlock:${secrets.defaultKey}|${secrets.backupVersion}`);
+    if (this.unlockThrows) throw coreError(this.unlockThrows);
+    return "7";
+  }
+
+  async restoreBackup(body: string) {
+    this.calls.push(`restore:${body}`);
+    let done = 0;
+    const total = this.backup.restoreBatches;
+    const progress = () => ({
+      done,
+      total,
+      imported: done,
+      failed: 0,
+      finished: done >= total,
+    });
+    return {
+      progress: async () => progress(),
+      next: async () => {
+        done++;
+        return progress();
+      },
+      free: async () => {
+        this.calls.push("restore:free");
+      },
+    };
+  }
+
+  async backupStatus() {
+    return {
+      version: this.backup.version,
+      enabled: this.backup.enabled,
+      recoverySetUp: this.backup.enabled,
+      outdated: false,
+      keysTotal: 3,
+      keysBackedUp: this.backup.enabled ? 3 : 0,
+    };
+  }
+
+  async disableBackup() {
+    this.backup.enabled = false;
+  }
+
+  async recoveryKeyCheck(input: Uint8Array) {
+    const text = new TextDecoder().decode(input);
+    this.secretsSeen.push(text);
+    return text.startsWith("EsT") ? ("Valid" as const) : ("NotAKey" as const);
+  }
+
+  async exportRoomKeys(passphrase: Uint8Array, channelIds: string[] = []) {
+    this.secretsSeen.push(new TextDecoder().decode(passphrase));
+    return {
+      data: `-----BEGIN MEGOLM SESSION DATA-----${channelIds.join(",")}`,
+      sessions: 2,
+    };
+  }
+
+  async importRoomKeys(file: string, passphrase: Uint8Array) {
+    this.secretsSeen.push(new TextDecoder().decode(passphrase));
+    if (this.importThrows) throw coreError(this.importThrows);
+    for (const key of this.importedKeys) this.missing.delete(key.sessionId);
+    return {
+      total: this.importedKeys.length + 1,
+      imported: this.importedKeys.length,
+      skipped: file.includes("matrix") ? 1 : 0,
+      roomKeys: this.importedKeys,
+    };
+  }
+
+  async debugReport() {
+    return '{"core_version":"0.2.0"}';
+  }
+
   async encryptBlob(blob: Blob) {
     return { blob, fileJson: '{"v":"v2"}', size: blob.size };
   }
@@ -225,6 +386,69 @@ export class FakeProvider implements E2eeProvider {
 
   async destroy() {
     this.destroyed = true;
+  }
+}
+
+/** A SAS flow driven by the test: `state` is set from outside */
+export class FakeSasFlow implements E2eeSasFlow {
+  readonly isSelfVerification: boolean;
+  current: E2eeSasState = { type: "Requested" };
+  actions: string[] = [];
+  freed = false;
+
+  constructor(
+    readonly flowId: string,
+    readonly otherUserId: string,
+    readonly device: string,
+  ) {
+    this.isSelfVerification = otherUserId === SELF;
+  }
+
+  async state() {
+    return this.current;
+  }
+
+  async otherDeviceId() {
+    return this.device;
+  }
+
+  async accept() {
+    this.actions.push("accept");
+    this.current = { type: "Ready" };
+  }
+
+  async start() {
+    this.actions.push("start");
+    this.current = { type: "Started" };
+  }
+
+  async confirm() {
+    this.actions.push("confirm");
+    this.current = { type: "Confirmed" };
+  }
+
+  async mismatch() {
+    this.actions.push("mismatch");
+    this.current = {
+      type: "Cancelled",
+      reason: "Mismatch",
+      code: "m.mismatched_sas",
+      byUs: true,
+    };
+  }
+
+  async cancel() {
+    this.actions.push("cancel");
+    this.current = {
+      type: "Cancelled",
+      reason: "User",
+      code: "m.user",
+      byUs: true,
+    };
+  }
+
+  async free() {
+    this.freed = true;
   }
 }
 

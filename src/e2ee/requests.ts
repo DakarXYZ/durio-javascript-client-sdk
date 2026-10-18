@@ -140,6 +140,23 @@ export class Mutex {
   }
 }
 
+/** The server refused an E2EE request (or did not answer: `status` 0) */
+export class E2eeRequestError extends E2eeError {
+  readonly status: number;
+
+  /**
+   * Construct error
+   * @param status HTTP status, 0 without a response
+   */
+  constructor(status: number) {
+    super(
+      status === 0 ? "NoResponse" : "RequestFailed",
+      status === 0 ? "the server did not answer" : `request failed: ${status}`,
+    );
+    this.status = status;
+  }
+}
+
 /** The message could not be prepared for encryption; `retryable`: network or server trouble */
 export class E2eeSendPreparationError extends E2eeError {
   readonly retryable: boolean;
@@ -168,6 +185,7 @@ export interface E2eeSyncOptions {
     method: string,
     path: string,
     body?: string,
+    headers?: Record<string, string>,
   ) => Promise<RawResponse>;
 }
 
@@ -215,7 +233,8 @@ export class E2eeSync {
     this.#provider = provider;
     this.#request =
       options.request ??
-      ((method, path, body) => rawRequest(client, method, path, body));
+      ((method, path, body, headers) =>
+        rawRequest(client, method, path, body, headers));
     this.#backoff = options.backoff ?? new Backoff();
     this.#safetyIntervalMs = options.safetyIntervalMs ?? SAFETY_PASS_MS;
   }
@@ -331,6 +350,55 @@ export class E2eeSync {
       }
 
       throw new E2eeSendPreparationError(true);
+    });
+  }
+
+  /**
+   * Run one request of the core now, outside the passes, and mark it: the backup
+   * version of a new recovery key (CR-12), with an MFA ticket when it replaces a
+   * backup. A 401 here is the missing ticket (`MfaRequired` from the core), not an
+   * expired session, so it does not stop the loop.
+   * @param request Request handed out by the core
+   * @param headers Extra headers (`x-mfa-ticket`)
+   * @throws the core's error from `markRequestFailed` (`MfaRequired`, …), or an
+   *   `E2eeRequestError` with the status when the server refused it
+   */
+  runNow(
+    request: E2eeOutgoingRequest,
+    headers: Record<string, string> = {},
+  ): Promise<void> {
+    return this.#mutex.run(async () => {
+      let response: RawResponse;
+      try {
+        response = await this.#request(
+          request.method,
+          request.path,
+          request.body,
+          headers,
+        );
+      } catch {
+        await this.#provider.markRequestFailed(request.id, request.kind, 0);
+        throw new E2eeRequestError(0);
+      }
+
+      if (isSuccess(response.status)) {
+        await this.#provider.markRequestSent(
+          request.id,
+          request.kind,
+          response.body,
+        );
+        // the secret and key uploads follow with the normal passes
+        this.requestPass();
+        return;
+      }
+
+      e2eeWarn(`${request.kind} failed`, response.status);
+      await this.#provider.markRequestFailed(
+        request.id,
+        request.kind,
+        response.status,
+      );
+      throw new E2eeRequestError(response.status);
     });
   }
 

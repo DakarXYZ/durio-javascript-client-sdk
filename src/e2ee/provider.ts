@@ -128,12 +128,151 @@ export type E2eeDecryptResult =
       code: string;
     };
 
+export type E2eeTrust = "Verified" | "Unverified" | "Blocked";
+
+/** Trust the host may set; `Verified` comes from a SAS flow only (review O-3) */
+export type E2eeSettableTrust = "Unverified" | "Blocked";
+
 export interface E2eeDevice {
   userId: string;
   deviceId: string;
+  curve25519?: string | null;
   ed25519: string | null;
-  trust: "Verified" | "Unverified" | "Blocked";
+  trust: E2eeTrust;
   deleted: boolean;
+}
+
+/** This device's identity keys (the Ed25519 key is its fingerprint) */
+export interface E2eeIdentityKeys {
+  curve25519: string;
+  ed25519: string;
+}
+
+/** A device whose mailbox keeps refusing our to-device messages: it misses keys */
+export interface E2eeUndeliveredDevice {
+  userId: string;
+  deviceId: string;
+  attempts: number;
+  gaveUp: boolean;
+}
+
+// ----------------------------------------------------------- verification
+
+/** One of the 64 SAS emoji; `description` is the English name (translation key) */
+export interface E2eeSasEmoji {
+  /** 0..63: index into the Matrix SAS emoji table */
+  index: number;
+  symbol: string;
+  description: string;
+}
+
+export type E2eeSasCancelReason =
+  | "User"
+  | "Timeout"
+  | "Mismatch"
+  | "AcceptedElsewhere"
+  | "Other";
+
+/** What the verification dialog shows; the core holds the state machine */
+export type E2eeSasState =
+  | { type: "Requested" }
+  /** `accept()` or `cancel()` */
+  | { type: "Incoming" }
+  /** Either side may `start()` */
+  | { type: "Ready" }
+  | { type: "Started" }
+  /** Compare, then `confirm()` or `mismatch()` */
+  | { type: "ShowCodes"; emoji: E2eeSasEmoji[]; decimals: number[] }
+  | { type: "Confirmed" }
+  /** The other device is verified */
+  | { type: "Done" }
+  | {
+      type: "Cancelled";
+      reason: E2eeSasCancelReason;
+      code: string;
+      byUs: boolean;
+    };
+
+/**
+ * One SAS flow (CR-11). Re-read `state()` after every mailbox pass and every action;
+ * `free()` when the dialog goes.
+ */
+export interface E2eeSasFlow {
+  readonly flowId: string;
+  /** The other user (ULID); our own for a self-verification */
+  readonly otherUserId: string;
+  readonly isSelfVerification: boolean;
+  state(): Promise<E2eeSasState>;
+  otherDeviceId(): Promise<string | null>;
+  accept(): Promise<void>;
+  start(): Promise<void>;
+  confirm(): Promise<void>;
+  /** The codes differ: possible attack, nobody becomes verified */
+  mismatch(): Promise<void>;
+  cancel(): Promise<void>;
+  free(): Promise<void>;
+}
+
+// ----------------------------------------------------------------- backup
+
+/**
+ * A new recovery key (or a new backup under the same one): show `recoveryKey` once
+ * (`null` on a rotation), then run `request`. Never log it.
+ */
+export interface E2eeRecoverySetup {
+  recoveryKey: string | null;
+  request: E2eeOutgoingRequest;
+}
+
+/** Bodies of the four restore `GET`s, as the server returned them */
+export interface E2eeRecoverySecrets {
+  defaultKey: string;
+  keyDescription: string;
+  backupSecret: string;
+  backupVersion: string;
+}
+
+export interface E2eeBackupStatus {
+  version: string | null;
+  enabled: boolean;
+  recoverySetUp: boolean;
+  /** Replaced on another device: unlock it again here */
+  outdated: boolean;
+  keysTotal: number;
+  keysBackedUp: number;
+}
+
+export interface E2eeRestoreProgress {
+  done: number;
+  total: number;
+  imported: number;
+  failed: number;
+  finished: boolean;
+}
+
+/** A restore in batches: `next()` until `finished`, then `free()` */
+export interface E2eeBackupRestore {
+  progress(): Promise<E2eeRestoreProgress>;
+  next(max?: number): Promise<E2eeRestoreProgress>;
+  free(): Promise<void>;
+}
+
+export type E2eeRecoveryKeyCheck = "Valid" | "Typo" | "NotAKey";
+
+// -------------------------------------------------------------- key files
+
+/** A key export file (CR-21): save `data` as text; never log it */
+export interface E2eeKeyExport {
+  data: string;
+  sessions: number;
+}
+
+export interface E2eeKeyImportResult {
+  total: number;
+  imported: number;
+  /** Sessions of rooms of other Matrix apps, left out */
+  skipped: number;
+  roomKeys: E2eeRoomKey[];
 }
 
 /** `encryptBlob`: upload `blob`, put `fileJson` (secret: the key) into the payload */
@@ -163,6 +302,14 @@ export type E2eeErrorCode =
   | "DeviceKeysConflict"
   | "RequestRejected"
   | "AttachmentHashMismatch"
+  | "NoBackup"
+  | "RecoveryKeyTypo"
+  | "WrongRecoveryKey"
+  | "BackupKeyMismatch"
+  | "WrongPassphrase"
+  | "InvalidKeyFile"
+  | "Store"
+  | "StoreMismatch"
   | "Panic"
   | "WorkerClosed"
   | "NotOpen"
@@ -220,6 +367,57 @@ export interface E2eeProvider {
 
   /** Known devices of a user (ULID); empty if none has E2EE */
   devices(userId: string): Promise<E2eeDevice[]>;
+  /** Block a device or reset it to unverified (`Verified` only through SAS) */
+  setDeviceTrust(
+    userId: string,
+    deviceId: string,
+    trust: E2eeSettableTrust,
+  ): Promise<void>;
+  /** This device's identity keys */
+  identityKeys(): Promise<E2eeIdentityKeys>;
+  /** Devices that do not receive our keys (full mailbox) */
+  undeliveredDevices(): Promise<E2eeUndeliveredDevice[]>;
+
+  /** Start a SAS verification of a device; it leaves with the next request pass */
+  requestVerification(userId: string, deviceId: string): Promise<E2eeSasFlow>;
+  /** The flow of an id from a `verifications` event, if it is still known */
+  verification(flowId: string): Promise<E2eeSasFlow | null>;
+  /** Every open flow */
+  verifications(): Promise<E2eeSasFlow[]>;
+  /** The 64 SAS emoji (symbols and English names) */
+  sasEmojiTable(): Promise<E2eeSasEmoji[]>;
+
+  /**
+   * A new recovery key and backup; nothing changes on the server until its request
+   * ran. Secrets are `Uint8Array`s the caller zeroes after the call.
+   */
+  createRecovery(passphrase?: Uint8Array): Promise<E2eeRecoverySetup>;
+  /** A new backup under the same recovery key (needs an MFA ticket) */
+  rotateBackup(): Promise<E2eeRecoverySetup>;
+  /** Recovery key or passphrase + the secret storage → the backup version */
+  unlockBackup(
+    input: Uint8Array,
+    secrets: E2eeRecoverySecrets,
+  ): Promise<string>;
+  /** `GET /e2ee/backup/keys?version=<v>` body → a restore in batches */
+  restoreBackup(keysBody: string): Promise<E2eeBackupRestore>;
+  backupStatus(): Promise<E2eeBackupStatus>;
+  disableBackup(): Promise<void>;
+  /** Whether the input looks like a recovery key (or has a typo in one) */
+  recoveryKeyCheck(input: Uint8Array): Promise<E2eeRecoveryKeyCheck>;
+
+  /** Room keys into a passphrase-protected file (seconds of PBKDF2) */
+  exportRoomKeys(
+    passphrase: Uint8Array,
+    channelIds?: string[],
+  ): Promise<E2eeKeyExport>;
+  /** A key file of dur.io or another Matrix app (`WrongPassphrase`, `InvalidKeyFile`) */
+  importRoomKeys(
+    file: string,
+    passphrase: Uint8Array,
+  ): Promise<E2eeKeyImportResult>;
+  /** JSON with counts, states and error codes only (CR-22) */
+  debugReport(): Promise<string>;
 
   /** Encrypt a file (streamed in the worker) */
   encryptBlob(blob: Blob): Promise<E2eeEncryptedBlob>;

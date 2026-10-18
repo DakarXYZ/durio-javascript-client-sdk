@@ -20,6 +20,7 @@ import type { Channel } from "../classes/Channel.js";
 import type { File } from "../classes/File.js";
 import type { Message } from "../classes/Message.js";
 
+import { E2eeBackup } from "./backup.js";
 import { E2eeChannels, type E2eePinStore } from "./channels.js";
 import {
   E2eeDecryptor,
@@ -38,10 +39,19 @@ import {
 } from "./payload.js";
 import {
   type E2eeChannelSettings,
+  type E2eeDevice,
   type E2eeEncryptedBlob,
   type E2eeEncryptedBytes,
   E2eeError,
+  type E2eeIdentityKeys,
+  type E2eeKeyExport,
+  type E2eeKeyImportResult,
   type E2eeProvider,
+  type E2eeRecoveryKeyCheck,
+  type E2eeSasEmoji,
+  type E2eeSasFlow,
+  type E2eeSettableTrust,
+  type E2eeUndeliveredDevice,
   e2eeErrorCode,
 } from "./provider.js";
 import {
@@ -59,6 +69,9 @@ import {
  * - `locked`: encryption is active in another window (Web Lock, Q28)
  * - `unavailable`: this build or device cannot run the core (no store key)
  * - `error`: the core failed (a trap) and was stopped
+ * - `keyLost`: the store of this device cannot be opened with its key (the key was
+ *   lost, or the store is damaged): reset = sign out and in again (C22, AN-42)
+ * - `updateApp`: the store was written by a newer version of the core (CR-23)
  */
 export type E2eeStatus =
   | "off"
@@ -66,10 +79,24 @@ export type E2eeStatus =
   | "ready"
   | "locked"
   | "unavailable"
-  | "error";
+  | "error"
+  | "keyLost"
+  | "updateApp";
+
+/** SAS actions of the user */
+export type E2eeSasAction =
+  | "accept"
+  | "start"
+  | "confirm"
+  | "mismatch"
+  | "cancel";
 
 /** What the app hears from E2EE (WEB-07 builds its UI on it) */
-export type E2eeEvent = E2eeSyncEvent | { type: "status"; status: E2eeStatus };
+export type E2eeEvent =
+  | E2eeSyncEvent
+  | { type: "status"; status: E2eeStatus }
+  /** A user's device list changed (own: maybe a new device to verify) */
+  | { type: "deviceList"; user: string };
 
 const MAX_ENCRYPT_ATTEMPTS = 3;
 const ALGORITHM = "m.megolm.v1.aes-sha2";
@@ -81,6 +108,8 @@ export class E2ee {
   readonly #client: Client;
   readonly channels = new E2eeChannels();
   readonly decryptor: E2eeDecryptor;
+  /** Key backup and recovery (WEB-07) */
+  readonly backup: E2eeBackup;
 
   readonly status: Accessor<E2eeStatus>;
   readonly #setStatus: Setter<E2eeStatus>;
@@ -96,6 +125,11 @@ export class E2ee {
   constructor(client: Client) {
     this.#client = client;
     this.decryptor = new E2eeDecryptor(client, () => this.#provider);
+    this.backup = new E2eeBackup(
+      client,
+      () => this.#ready(),
+      () => this.decryptor.queueAll(),
+    );
 
     const [status, setStatus] = createSignal<E2eeStatus>("off");
     this.status = status;
@@ -145,7 +179,10 @@ export class E2ee {
     const reason: E2eeFailureReason | undefined =
       status === "locked"
         ? "locked"
-        : status === "unavailable" || status === "error"
+        : status === "unavailable" ||
+            status === "error" ||
+            status === "keyLost" ||
+            status === "updateApp"
           ? "unavailable"
           : undefined;
     if (reason) this.decryptor.markUnavailable(reason);
@@ -195,17 +232,21 @@ export class E2ee {
    * Remove the crypto core: close it (account switch) or destroy its store (sign-out).
    * Keys and plaintext of this client leave memory.
    * @param options Whether to delete the account's crypto store
+   * @returns Whether a store was destroyed (false: none installed, or the deletion
+   *   failed — the host then deletes it with a worker of its own, WEB-12)
    */
-  async uninstall(options: { destroy?: boolean } = {}): Promise<void> {
+  async uninstall(options: { destroy?: boolean } = {}): Promise<boolean> {
     const provider = this.#provider;
     this.#sync?.stop();
     this.#sync = undefined;
     this.#provider = undefined;
     this.decryptor.clear();
 
+    let destroyed = false;
     if (provider) {
       try {
         await (options.destroy ? provider.destroy() : provider.close());
+        destroyed = !!options.destroy;
       } catch (e) {
         e2eeWarn("crypto core not closed", e2eeErrorCode(e));
       }
@@ -213,6 +254,7 @@ export class E2ee {
 
     if (options.destroy) this.channels.clear();
     this.setStatus("off");
+    return destroyed;
   }
 
   #onSyncEvent(event: E2eeSyncEvent) {
@@ -327,7 +369,9 @@ export class E2ee {
 
   /** `E2eeDeviceListUpdate {user}` */
   onDeviceListUpdate(user: string): void {
-    this.#sync?.onDeviceListUpdate(user);
+    if (!this.#sync) return;
+    this.#sync.onDeviceListUpdate(user);
+    this.#emit({ type: "deviceList", user });
   }
 
   /** `E2eeKeysLow` */
@@ -521,6 +565,145 @@ export class E2ee {
       (data as { encryption?: APIChannel & object }).encryption as never,
     );
     this.observeChannel(data as APIChannel, channel.id);
+  }
+
+  // ------------------------------------------------- devices (WEB-07, AN-30)
+
+  /** This device's identity keys (its fingerprint is the Ed25519 key) */
+  async identityKeys(): Promise<E2eeIdentityKeys> {
+    return this.#ready()[0].identityKeys();
+  }
+
+  /**
+   * Known E2EE devices of a user
+   * @param userId User
+   */
+  async devices(userId: string): Promise<E2eeDevice[]> {
+    return this.#ready()[0].devices(userId);
+  }
+
+  /**
+   * Block a device or reset it to unverified; `Verified` only through SAS (O-3)
+   * @param device Device
+   * @param trust New trust
+   */
+  async setDeviceTrust(
+    device: Pick<E2eeDevice, "userId" | "deviceId">,
+    trust: E2eeSettableTrust,
+  ): Promise<void> {
+    return this.#ready()[0].setDeviceTrust(
+      device.userId,
+      device.deviceId,
+      trust,
+    );
+  }
+
+  /** Devices that miss our keys (their mailbox stays full) */
+  async undeliveredDevices(): Promise<E2eeUndeliveredDevice[]> {
+    return this.#ready()[0].undeliveredDevices();
+  }
+
+  // --------------------------------------------- verification (WEB-07, CR-11)
+
+  /**
+   * Ask a device for a SAS verification; the request leaves at once
+   * @param userId User (own id: one of our other devices)
+   * @param deviceId Device
+   */
+  async requestVerification(
+    userId: string,
+    deviceId: string,
+  ): Promise<E2eeSasFlow> {
+    const [provider, sync] = this.#ready();
+    const flow = await provider.requestVerification(userId, deviceId);
+    sync.requestPass();
+    return flow;
+  }
+
+  /**
+   * The flow of an id from a `verifications` event
+   * @param flowId Flow id
+   */
+  async verification(flowId: string): Promise<E2eeSasFlow | null> {
+    return this.#ready()[0].verification(flowId);
+  }
+
+  /** Every open verification flow */
+  async verifications(): Promise<E2eeSasFlow[]> {
+    return this.#ready()[0].verifications();
+  }
+
+  /**
+   * Act on a flow; its messages leave at once
+   * @param flow Flow
+   * @param action What the user did
+   */
+  async verificationAction(
+    flow: E2eeSasFlow,
+    action: E2eeSasAction,
+  ): Promise<void> {
+    await flow[action]();
+    this.#sync?.requestPass();
+  }
+
+  /** The SAS emoji table (symbols and English names by index) */
+  async sasEmojiTable(): Promise<E2eeSasEmoji[]> {
+    return this.#ready()[0].sasEmojiTable();
+  }
+
+  // ---------------------------------------- key files and report (CR-21, 22)
+
+  /**
+   * Room keys into a passphrase-protected file
+   * @param passphrase UTF-8 (wiped here)
+   * @param channelIds Channels, all if empty
+   */
+  async exportKeys(
+    passphrase: Uint8Array,
+    channelIds: string[] = [],
+  ): Promise<E2eeKeyExport> {
+    try {
+      return await this.#ready()[0].exportRoomKeys(passphrase, channelIds);
+    } finally {
+      passphrase.fill(0);
+    }
+  }
+
+  /**
+   * Import a key file; messages waiting for its keys are decrypted again
+   * @param file File content (text)
+   * @param passphrase UTF-8 (wiped here)
+   * @throws `WrongPassphrase` (or a modified file), `InvalidKeyFile`
+   */
+  async importKeys(
+    file: string,
+    passphrase: Uint8Array,
+  ): Promise<E2eeKeyImportResult> {
+    try {
+      const result = await this.#ready()[0].importRoomKeys(file, passphrase);
+      if (result.roomKeys.length)
+        this.decryptor.onRoomKeys(result.roomKeys.map((key) => key.sessionId));
+      return result;
+    } finally {
+      passphrase.fill(0);
+    }
+  }
+
+  /**
+   * Whether the input looks like a recovery key, has a typo, or is a passphrase
+   * @param input UTF-8 (wiped here)
+   */
+  async recoveryKeyCheck(input: Uint8Array): Promise<E2eeRecoveryKeyCheck> {
+    try {
+      return await this.#ready()[0].recoveryKeyCheck(input);
+    } finally {
+      input.fill(0);
+    }
+  }
+
+  /** The core's diagnostic report: counts, states and error codes only */
+  async debugReport(): Promise<string> {
+    return this.#ready()[0].debugReport();
   }
 
   // ---------------------------------------------------------------- files

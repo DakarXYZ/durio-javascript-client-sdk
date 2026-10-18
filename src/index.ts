@@ -11,7 +11,9 @@ export { UserBadges, UserFlags } from "./hydration/user.js";
 export * from "./lib/regex.js";
 export * from "./permissions/definitions.js";
 export { E2ee } from "./e2ee/E2ee.js";
-export type { E2eeEvent, E2eeStatus } from "./e2ee/E2ee.js";
+export type { E2eeEvent, E2eeSasAction, E2eeStatus } from "./e2ee/E2ee.js";
+export { E2eeBackup, MFA_TICKET_HEADER } from "./e2ee/backup.js";
+export { E2eeRequestError } from "./e2ee/requests.js";
 export type {
   E2eeFailureReason,
   E2eeMessageState,
