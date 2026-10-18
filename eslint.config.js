@@ -26,4 +26,12 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // dur.io: no plaintext or keys in the console, even in development (decision 6);
+    // e2ee/log.ts is the one sanctioned logger (fixed texts and codes)
+    files: ["src/e2ee/**"],
+    rules: {
+      "no-console": "error",
+    },
+  },
 ]);
