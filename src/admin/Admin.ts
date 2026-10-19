@@ -55,7 +55,7 @@ export interface AdminStatus {
 /** Lifetimes an invite link can have, in hours */
 export const ADMIN_INVITE_TTL_HOURS = [1, 4, 12, 24] as const;
 
-/** An account invite made by an admin, shared as `https://<domain>/invite/<code>` */
+/** An account invite made by an admin, shared as `https://<domain>/join/<code>` */
 export interface AdminInvite {
   code: string;
   expiresAt: Date;
