@@ -191,4 +191,65 @@ describe("instance admin calls (dur.io)", () => {
       type: "InvalidToken",
     });
   });
+
+  it("makes, lists and revokes invite links", async () => {
+    const client = makeClient();
+    const made = {
+      _id: "CODE1",
+      expires_at: "2026-10-19T14:00:00Z",
+      created_at: "2026-10-19T13:00:00Z",
+      multi_use: false,
+      uses: 0,
+      created_by: "ADMIN",
+    };
+    const requests = fakeServer((r) => {
+      if (r.path === "/admin/invites" && r.method === "POST")
+        return { status: 200, body: made };
+      if (r.path === "/admin/invites")
+        return {
+          status: 200,
+          body: [{ ...made, _id: "CODE2", multi_use: true, uses: 3 }, made],
+        };
+      if (r.path === "/admin/invites/CODE1") return { status: 204 };
+      return error(404, "NotFound");
+    });
+
+    const invite = await client.admin.createInvite(1, false);
+    expect(invite).toEqual({
+      code: "CODE1",
+      expiresAt: new Date("2026-10-19T14:00:00Z"),
+      createdAt: new Date("2026-10-19T13:00:00Z"),
+      multiUse: false,
+      uses: 0,
+      createdBy: "ADMIN",
+    });
+    expect(JSON.parse(requests[0].body!)).toEqual({
+      ttl_hours: 1,
+      multi_use: false,
+    });
+    expect(requests[0].headers["Content-Type"]).toBe("application/json");
+
+    const list = await client.admin.invites();
+    expect(list.map((i) => [i.code, i.multiUse, i.uses])).toEqual([
+      ["CODE2", true, 3],
+      ["CODE1", false, 0],
+    ]);
+
+    await client.admin.revokeInvite("CODE1");
+    await expect(client.admin.revokeInvite("GONE")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("needs admin mode for invites like for every admin action", async () => {
+    const client = makeClient();
+    fakeServer(() => error(403, "AdminElevationRequired"));
+    await expect(client.admin.createInvite(24, true)).rejects.toMatchObject({
+      type: "AdminElevationRequired",
+    });
+    fakeServer(() => error(400, "InvalidOperation"));
+    await expect(
+      client.admin.createInvite(2 as never, true),
+    ).rejects.toMatchObject({ status: 400, type: "InvalidOperation" });
+  });
 });

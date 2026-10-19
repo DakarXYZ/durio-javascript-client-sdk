@@ -15,6 +15,7 @@ import type {
   DataEditRole,
   DataEditServer,
   DiscoverRequest,
+  Invite,
   Override,
   Role,
 } from "stoat-api";
@@ -578,9 +579,10 @@ export class Server {
    * @returns An array of the server's invites
    */
   async fetchInvites(): Promise<ChannelInvite[]> {
-    const invites = await this.#collection.client.api.get(
+    // dur.io: `/servers//invites` (the `as ""` id) now types as `/admin/invites`
+    const invites = (await this.#collection.client.api.get(
       `/servers/${this.id as ""}/invites`,
-    );
+    )) as unknown as Invite[];
 
     return invites.map((invite) =>
       ChannelInvite.from(this.#collection.client, invite),

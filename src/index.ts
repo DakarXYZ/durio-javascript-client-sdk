@@ -29,8 +29,9 @@ export { MessageSendError } from "./e2ee/outbox.js";
 export * from "./e2ee/provider.js";
 export {
   ADMIN_ELEVATION_REQUIRED,
+  ADMIN_INVITE_TTL_HOURS,
   ADMIN_TOTP_REQUIRED,
   Admin,
   AdminRequestError,
 } from "./admin/Admin.js";
-export type { AdminSession, AdminStatus } from "./admin/Admin.js";
+export type { AdminInvite, AdminSession, AdminStatus } from "./admin/Admin.js";

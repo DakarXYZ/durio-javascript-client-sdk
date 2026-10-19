@@ -7,7 +7,11 @@
 // Admin mode: every admin action needs an elevation of the current session, made with a
 // validated MFA ticket (the account must have an authenticator app) and valid for about an
 // hour. Without one the server answers 403 `AdminElevationRequired`.
-import type { AdminUser, SessionInfo } from "stoat-api";
+import type {
+  AdminInvite as APIAdminInvite,
+  AdminUser,
+  SessionInfo,
+} from "stoat-api";
 import { decodeTime } from "ulid";
 
 import type { Client } from "../Client.js";
@@ -46,6 +50,22 @@ export interface AdminStatus {
   admin: boolean;
   /** Admin mode of this session is on until then */
   elevatedUntil?: Date;
+}
+
+/** Lifetimes an invite link can have, in hours */
+export const ADMIN_INVITE_TTL_HOURS = [1, 4, 12, 24] as const;
+
+/** An account invite made by an admin, shared as `https://<domain>/invite/<code>` */
+export interface AdminInvite {
+  code: string;
+  expiresAt: Date;
+  createdAt: Date;
+  /** Works for any number of accounts until it expires, otherwise once */
+  multiUse: boolean;
+  /** Accounts created with it */
+  uses: number;
+  /** Id of the admin who made it */
+  createdBy: string;
 }
 
 /** A session of a user as an admin sees it (no token) */
@@ -195,10 +215,48 @@ export class Admin {
     );
   }
 
+  /**
+   * Make an invite link for new accounts (needs admin mode)
+   * @param ttlHours How long it works: 1, 4, 12 or 24 hours
+   * @param multiUse Works for any number of accounts until it expires, otherwise once
+   */
+  async createInvite(
+    ttlHours: (typeof ADMIN_INVITE_TTL_HOURS)[number],
+    multiUse: boolean,
+  ): Promise<AdminInvite> {
+    return invite(
+      JSON.parse(
+        await this.#request("POST", "/admin/invites", undefined, {
+          ttl_hours: ttlHours,
+          multi_use: multiUse,
+        }),
+      ) as APIAdminInvite,
+    );
+  }
+
+  /** Active invites made in the app, newest first */
+  async invites(): Promise<AdminInvite[]> {
+    return (
+      JSON.parse(
+        await this.#request("GET", "/admin/invites"),
+      ) as APIAdminInvite[]
+    ).map(invite);
+  }
+
+  /**
+   * Revoke an invite
+   * @param code Invite code
+   * @throws AdminRequestError: 404 when it is gone already
+   */
+  async revokeInvite(code: string): Promise<void> {
+    await this.#request("DELETE", `/admin/invites/${encodeURIComponent(code)}`);
+  }
+
   async #request(
     method: string,
     path: string,
     headers?: Record<string, string>,
+    body?: unknown,
   ): Promise<string> {
     let response;
     try {
@@ -206,7 +264,7 @@ export class Admin {
         this.#client,
         method,
         path,
-        undefined,
+        body === undefined ? undefined : JSON.stringify(body),
         headers,
       );
     } catch {
@@ -229,4 +287,19 @@ function createdAt(id: string): Date {
   } catch {
     return new Date(0);
   }
+}
+
+/**
+ * An invite of the API with dates
+ * @param data Invite
+ */
+function invite(data: APIAdminInvite): AdminInvite {
+  return {
+    code: data._id,
+    expiresAt: new Date(data.expires_at),
+    createdAt: new Date(data.created_at),
+    multiUse: data.multi_use,
+    uses: data.uses,
+    createdBy: data.created_by,
+  };
 }
