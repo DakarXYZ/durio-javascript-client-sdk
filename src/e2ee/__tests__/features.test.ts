@@ -218,6 +218,59 @@ describe("key backup (WEB-07, CR-12)", () => {
     expect(input.every((b) => b === 0)).toBe(true);
   });
 
+  it("turns the backup off: deletes the server's version with MFA, then locally", async () => {
+    const { client, provider } = await installed();
+    provider.backup.enabled = true;
+    const requests = fakeServer((r) => {
+      if (r.path === "/e2ee/backup/version")
+        return { status: 200, body: { version: "7" } };
+      if (r.path === "/e2ee/backup/version/7" && r.method === "DELETE")
+        return r.headers[MFA_TICKET_HEADER] === "ticket"
+          ? { status: 204 }
+          : { status: 401, body: { type: "InvalidToken" } };
+      return { status: 200, body: { messages: [] } };
+    });
+
+    // without a ticket nothing changes on this device
+    await expect(client.e2ee.backup.turnOff()).rejects.toMatchObject({
+      code: "MfaRequired",
+    });
+    expect(provider.backup.enabled).toBe(true);
+
+    await client.e2ee.backup.turnOff("ticket");
+    expect(provider.backup.enabled).toBe(false);
+    const deletes = requests.filter((r) => r.method === "DELETE");
+    expect(deletes.map((r) => r.path)).toEqual([
+      "/e2ee/backup/version/7",
+      "/e2ee/backup/version/7",
+    ]);
+    expect(deletes.at(-1)!.headers[MFA_TICKET_HEADER]).toBe("ticket");
+  });
+
+  it("turns off locally when the server has no backup or refuses", async () => {
+    const { client, provider } = await installed();
+    provider.backup.enabled = true;
+    let refuse = false;
+    const requests = fakeServer((r) =>
+      r.method === "DELETE"
+        ? { status: 500 }
+        : refuse
+          ? { status: 200, body: { version: "2" } }
+          : { status: 404 },
+    );
+
+    await client.e2ee.backup.turnOff();
+    expect(provider.backup.enabled).toBe(false);
+    expect(requests.some((r) => r.method === "DELETE")).toBe(false);
+
+    provider.backup.enabled = true;
+    refuse = true;
+    const error = await client.e2ee.backup.turnOff("t").catch((e) => e);
+    expect(error).toBeInstanceOf(E2eeRequestError);
+    expect((error as E2eeRequestError).status).toBe(500);
+    expect(provider.backup.enabled).toBe(true);
+  });
+
   it("passes the core's wrong-key errors through", async () => {
     const { client, provider } = await installed();
     provider.unlockThrows = "WrongRecoveryKey";

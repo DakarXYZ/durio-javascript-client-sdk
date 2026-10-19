@@ -173,6 +173,52 @@ export class E2eeBackup {
     return this.#core()[0].disableBackup();
   }
 
+  /**
+   * Turn the backup off for the account: delete the server's backup and its keys, then
+   * stop uploading from this device. Other devices stop at their next upload (their
+   * version is gone) and say the backup changed. The recovery data in secret storage
+   * stays: it unlocks nothing without a backup, and a new backup replaces it.
+   * @param mfaTicket Token of an MFA ticket: the server deletes only with one
+   * @throws `MfaRequired` (no or a stale ticket), or `E2eeRequestError` when the
+   *   server refused or did not answer; then nothing changed on this device
+   */
+  async turnOff(mfaTicket?: string): Promise<void> {
+    const [provider] = this.#core();
+    const current = await this.#get("/e2ee/backup/version", true);
+    if (current !== undefined) {
+      let version: unknown;
+      try {
+        version = (JSON.parse(current) as { version?: unknown }).version;
+      } catch {
+        version = undefined;
+      }
+
+      if (typeof version !== "string" || !version)
+        throw new E2eeError("InvalidResponse", "malformed backup version");
+
+      let response;
+      try {
+        response = await rawRequest(
+          this.#client,
+          "DELETE",
+          `/e2ee/backup/version/${encodeURIComponent(version)}`,
+          undefined,
+          mfaTicket ? { [MFA_TICKET_HEADER]: mfaTicket } : {},
+        );
+      } catch {
+        throw new E2eeRequestError(0);
+      }
+
+      if (response.status === 401)
+        throw new E2eeError("MfaRequired", "deleting the backup needs MFA");
+      // 404: deleted meanwhile, by another device
+      if (!isSuccess(response.status) && response.status !== 404)
+        throw new E2eeRequestError(response.status);
+    }
+
+    await provider.disableBackup();
+  }
+
   #secret(type: string): Promise<string> {
     return this.#get(
       `/e2ee/secrets/${encodeURIComponent(type)}`,
