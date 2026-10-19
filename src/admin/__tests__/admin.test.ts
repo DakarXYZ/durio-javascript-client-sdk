@@ -174,4 +174,21 @@ describe("instance admin calls (dur.io)", () => {
       type: "AdminElevationRequired",
     });
   });
+
+  it("a wrong code on elevation is an error of the call, nothing more", async () => {
+    const client = makeClient();
+    fakeServer(() => ({
+      status: 401,
+      body: { type: "InvalidToken", location: "crates/delta" },
+    }));
+    const ticket = new MFATicket(
+      client,
+      { token: "TOKEN" } as never,
+      (() => undefined) as never,
+    );
+    await expect(client.admin.elevate(ticket)).rejects.toMatchObject({
+      status: 401,
+      type: "InvalidToken",
+    });
+  });
 });
