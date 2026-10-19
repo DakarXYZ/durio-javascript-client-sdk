@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { MFATicket } from "../../classes/MFA.js";
 import { OTHER, fakeServer, makeClient } from "../../e2ee/__tests__/fakes.js";
 import { AdminRequestError } from "../Admin.js";
 
@@ -17,7 +18,10 @@ describe("instance admin calls (dur.io)", () => {
         : undefined,
     );
 
-    expect(await client.admin.status()).toBe(true);
+    expect(await client.admin.status()).toEqual({
+      admin: true,
+      elevatedUntil: undefined,
+    });
     const [key, value] = client.authenticationHeader;
     expect(requests[0].headers[key]).toBe(value);
   });
@@ -25,13 +29,13 @@ describe("instance admin calls (dur.io)", () => {
   it("is not an admin on a server without the routes, or when refused", async () => {
     const client = makeClient();
     fakeServer(() => undefined);
-    expect(await client.admin.status()).toBe(false);
+    expect(await client.admin.status()).toEqual({ admin: false });
 
     fakeServer(() => error(403, "NotPrivileged"));
-    expect(await client.admin.status()).toBe(false);
+    expect(await client.admin.status()).toEqual({ admin: false });
 
     fakeServer(() => ({ status: 200, body: { admin: false } }));
-    expect(await client.admin.status()).toBe(false);
+    expect((await client.admin.status()).admin).toBe(false);
 
     fakeServer(() => "network");
     await expect(client.admin.status()).rejects.toMatchObject({ status: 0 });
@@ -110,6 +114,64 @@ describe("instance admin calls (dur.io)", () => {
     fakeServer(() => error(404, "NotFound"));
     await expect(client.admin.endSession(OTHER, "S2")).rejects.toMatchObject({
       status: 404,
+    });
+  });
+
+  it("reads admin mode; an elapsed one is off", async () => {
+    const client = makeClient();
+    const later = new Date(Date.now() + 30 * 60e3).toISOString();
+    fakeServer(() => ({
+      status: 200,
+      body: { admin: true, elevated_until: later },
+    }));
+    expect((await client.admin.status()).elevatedUntil?.toISOString()).toBe(
+      later,
+    );
+
+    fakeServer(() => ({
+      status: 200,
+      body: { admin: true, elevated_until: "2020-01-01T00:00:00Z" },
+    }));
+    expect((await client.admin.status()).elevatedUntil).toBeUndefined();
+  });
+
+  it("turns admin mode on with an MFA ticket, once per ticket, and off", async () => {
+    const client = makeClient();
+    const requests = fakeServer((r) =>
+      r.path === "/admin/elevate"
+        ? r.method === "POST"
+          ? { status: 200, body: { expires_at: "2026-10-19T13:00:00Z" } }
+          : { status: 204 }
+        : undefined,
+    );
+    const ticket = new MFATicket(
+      client,
+      {
+        _id: "T",
+        account_id: "A",
+        token: "TOKEN",
+        validated: true,
+        authorised: false,
+      } as never,
+      (() => undefined) as never,
+    );
+
+    expect((await client.admin.elevate(ticket)).toISOString()).toBe(
+      "2026-10-19T13:00:00.000Z",
+    );
+    expect(requests[0].headers["X-MFA-Ticket"]).toBe("TOKEN");
+    await expect(client.admin.elevate(ticket)).rejects.toBeDefined();
+
+    await client.admin.endElevation();
+    expect(requests.map((r) => r.method)).toEqual(["POST", "DELETE"]);
+  });
+
+  it("says why admin mode is needed or refused", async () => {
+    const client = makeClient();
+    fakeServer(() => error(403, "AdminElevationRequired"));
+    await expect(client.admin.findUser("bob#0001")).rejects.toMatchObject({
+      status: 403,
+      type: "AdminElevationRequired",
     });
   });
 });
