@@ -10,6 +10,7 @@ import type {
   Error as StoatError,
 } from "stoat-api";
 
+import { Admin } from "./admin/Admin.js";
 import type { Channel } from "./classes/Channel.js";
 import type { Emoji } from "./classes/Emoji.js";
 import type { Message } from "./classes/Message.js";
@@ -193,6 +194,9 @@ export class Client extends AsyncEventEmitter<Events> {
   /** End-to-end encryption of DMs and groups (dur.io) */
   readonly e2ee: E2ee;
 
+  /** Instance administration: find users, end their sessions (dur.io) */
+  readonly admin: Admin;
+
   readonly api: API;
   readonly options: ClientOptions;
   readonly events: EventClient<1>;
@@ -286,6 +290,7 @@ export class Client extends AsyncEventEmitter<Events> {
     this.sessions = new SessionCollection(this);
     this.users = new UserCollection(this);
     this.e2ee = new E2ee(this);
+    this.admin = new Admin(this);
 
     this.events = new EventClient(1, "json", this.options);
     this.events.on("error", (error) =>

@@ -27,3 +27,5 @@ export type {
 } from "./e2ee/payload.js";
 export { MessageSendError } from "./e2ee/outbox.js";
 export * from "./e2ee/provider.js";
+export { Admin, AdminRequestError } from "./admin/Admin.js";
+export type { AdminSession } from "./admin/Admin.js";
