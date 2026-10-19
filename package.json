@@ -10,7 +10,9 @@
     }
   },
   "types": "lib/index.d.ts",
-  "repository": "https://github.com/stoatchat/javascript-client-sdk",
+  "repository": "https://github.com/DakarXYZ/durio-javascript-client-sdk",
+  "homepage": "https://github.com/DakarXYZ/durio-javascript-client-sdk",
+  "bugs": "https://github.com/DakarXYZ/durio-javascript-client-sdk/issues",
   "author": "insert <insrt.uk>",
   "license": "MIT",
   "scripts": {
