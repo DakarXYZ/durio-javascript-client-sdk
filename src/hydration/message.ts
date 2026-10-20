@@ -1,6 +1,6 @@
 import { ReactiveMap } from "@solid-primitives/map";
 import { ReactiveSet } from "@solid-primitives/set";
-import type { Interactions, Masquerade, Message } from "stoat-api";
+import type { Interactions, Masquerade, Message, Poll } from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
@@ -35,6 +35,8 @@ export type HydratedMessage = {
   encrypted?: EncryptedEnvelope;
   /** Decryption state; text and attachments come from the payload (WEB-05) */
   e2ee?: MessageE2ee;
+  /** Poll of the message (dur.io) */
+  poll?: Poll;
 };
 
 export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
@@ -90,6 +92,7 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
     pinned: (message) => message.pinned!,
     flags: (message) => message.flags!,
     encrypted: (message) => message.encrypted ?? undefined!,
+    poll: (message) => message.poll ?? undefined!,
     e2ee: () => undefined!,
   },
   initialHydration: () => ({

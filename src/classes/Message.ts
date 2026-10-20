@@ -6,6 +6,7 @@ import type {
   DataEditMessage,
   DataMessageSend,
   Masquerade,
+  Poll,
 } from "stoat-api";
 import { decodeTime } from "ulid";
 
@@ -252,6 +253,13 @@ export class Message {
   }
 
   /**
+   * Poll of this message (dur.io)
+   */
+  get poll(): Poll | undefined {
+    return this.#collection.getUnderlyingObject(this.id).poll;
+  }
+
+  /**
    * Whether this message is end-to-end encrypted (dur.io)
    */
   get isEncrypted(): boolean {
@@ -444,6 +452,27 @@ export class Message {
         emoji as ""
       }`,
       { remove_all: deleteAll },
+    );
+  }
+
+  /**
+   * Pick answers in the poll of this message; they replace earlier picks, an empty
+   * list takes the vote back (dur.io)
+   * @param answers Answer ids
+   */
+  async votePoll(answers: string[]): Promise<void> {
+    return await this.#collection.client.api.put(
+      `/channels/${this.channelId as ""}/messages/${this.id as ""}/poll`,
+      { answers },
+    );
+  }
+
+  /**
+   * Stop the poll of this message from taking votes (dur.io)
+   */
+  async closePoll(): Promise<void> {
+    return await this.#collection.client.api.post(
+      `/channels/${this.channelId as ""}/messages/${this.id as ""}/poll/close`,
     );
   }
 
