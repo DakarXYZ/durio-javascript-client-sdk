@@ -6,6 +6,7 @@ import type {
   DataEditMessage,
   DataMessageSend,
   Masquerade,
+  MessageImport,
   Poll,
 } from "stoat-api";
 import { decodeTime } from "ulid";
@@ -250,6 +251,14 @@ export class Message {
    */
   get flags(): number {
     return this.#collection.getUnderlyingObject(this.id).flags || 0;
+  }
+
+  /**
+   * Where this message was imported from (dur.io): its author is a phantom webhook with
+   * the original name and avatar, no user
+   */
+  get imported(): MessageImport | undefined {
+    return this.#collection.getUnderlyingObject(this.id).imported;
   }
 
   /**

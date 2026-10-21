@@ -1,6 +1,12 @@
 import { ReactiveMap } from "@solid-primitives/map";
 import { ReactiveSet } from "@solid-primitives/set";
-import type { Interactions, Masquerade, Message, Poll } from "stoat-api";
+import type {
+  Interactions,
+  Masquerade,
+  Message,
+  MessageImport,
+  Poll,
+} from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
@@ -37,6 +43,8 @@ export type HydratedMessage = {
   e2ee?: MessageE2ee;
   /** Poll of the message (dur.io) */
   poll?: Poll;
+  /** Where the message was imported from (dur.io) */
+  imported?: MessageImport;
 };
 
 export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
@@ -93,6 +101,7 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
     flags: (message) => message.flags!,
     encrypted: (message) => message.encrypted ?? undefined!,
     poll: (message) => message.poll ?? undefined!,
+    imported: (message) => message.imported ?? undefined!,
     e2ee: () => undefined!,
   },
   initialHydration: () => ({
