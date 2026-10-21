@@ -588,6 +588,13 @@ export class Client extends AsyncEventEmitter<Events> {
    * @returns Proxied media URL
    */
   proxyFile(url: string): string | undefined {
+    // dur.io: files of this server's autumn (previews of imported history) load as they
+    // are; January refuses to fetch from its own server
+    const autumn = this.configuration?.features.autumn;
+    if (autumn?.enabled && autumn.url && url.startsWith(`${autumn.url}/`)) {
+      return url;
+    }
+
     if (this.configuration?.features.january.enabled) {
       return `${this.configuration.features.january.url}/proxy?url=${encodeURIComponent(
         url,
