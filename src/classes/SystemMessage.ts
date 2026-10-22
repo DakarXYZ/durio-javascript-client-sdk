@@ -62,6 +62,8 @@ export abstract class SystemMessage {
         return new CallStartedSystemMessage(client, parent, message);
       case "encryption_enabled":
         return new EncryptionEnabledSystemMessage(client, message);
+      case "thread_created":
+        return new ThreadCreatedSystemMessage(client, parent, message);
       default:
         return new TextSystemMessage(client, {
           type: "text",
@@ -345,6 +347,41 @@ export class EncryptionEnabledSystemMessage extends SystemMessage {
 
   /**
    * User that enabled encryption
+   */
+  get by(): User | undefined {
+    return this.client!.users.get(this.byId);
+  }
+}
+
+/**
+ * A thread was started without a message to hang off (dur.io)
+ */
+export class ThreadCreatedSystemMessage extends SystemMessage {
+  readonly byId: string;
+  readonly name: string;
+  readonly threadId?: string;
+
+  /**
+   * Construct System Message
+   * @param client Client
+   * @param parent Message this system message is part of
+   * @param systemMessage System Message
+   */
+  constructor(
+    client: Client,
+    parent: APIMessage,
+    systemMessage: APISystemMessage & {
+      type: "thread_created";
+    },
+  ) {
+    super(client, systemMessage.type);
+    this.byId = systemMessage.by;
+    this.name = systemMessage.name;
+    this.threadId = parent.thread ?? undefined;
+  }
+
+  /**
+   * User that started the thread
    */
   get by(): User | undefined {
     return this.client!.users.get(this.byId);

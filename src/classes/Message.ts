@@ -7,7 +7,9 @@ import type {
   DataMessageSend,
   Masquerade,
   MessageImport,
+  MessageSpoiler,
   Poll,
+  SpoilerKind,
 } from "stoat-api";
 import { decodeTime } from "ulid";
 
@@ -266,6 +268,48 @@ export class Message {
    */
   get poll(): Poll | undefined {
     return this.#collection.getUnderlyingObject(this.id).poll;
+  }
+
+  /**
+   * Id of the thread started from this message (dur.io)
+   */
+  get threadId(): string | undefined {
+    return this.#collection.getUnderlyingObject(this.id).threadId;
+  }
+
+  /**
+   * The thread started from this message (dur.io)
+   */
+  get thread(): Channel | undefined {
+    const threadId = this.threadId;
+    return threadId ? this.#collection.client.channels.get(threadId) : undefined;
+  }
+
+  /**
+   * Set when a moderator hid this message behind a spoiler (dur.io)
+   */
+  get spoiler(): MessageSpoiler | undefined {
+    return this.#collection.getUnderlyingObject(this.id).spoiler;
+  }
+
+  /**
+   * Hide this message behind a spoiler: `ManageMessages` (dur.io)
+   * @param kind "Spoiler alert!" or an NSFW cover
+   */
+  async setSpoiler(kind: SpoilerKind): Promise<void> {
+    return await this.#collection.client.api.put(
+      `/channels/${this.channelId as ""}/messages/${this.id as ""}/spoiler`,
+      { kind },
+    );
+  }
+
+  /**
+   * Take this message out from behind its spoiler: `ManageMessages` (dur.io)
+   */
+  async removeSpoiler(): Promise<void> {
+    return await this.#collection.client.api.delete(
+      `/channels/${this.channelId as ""}/messages/${this.id as ""}/spoiler`,
+    );
   }
 
   /**

@@ -10,10 +10,12 @@ import type {
   ChannelEncryption,
   DataCreateInvite,
   DataEditChannel,
+  DataEditThread,
   DataMessageSearch,
   DataMessageSend,
   Invite,
   Override,
+  ThreadInfo,
 } from "stoat-api";
 import type { APIRoutes } from "stoat-api";
 import { decodeTime, ulid } from "ulid";
@@ -37,6 +39,11 @@ import type { Server } from "./Server.js";
 import type { ServerMember } from "./ServerMember.js";
 import type { User } from "./User.js";
 import { VoiceParticipant, VoiceStatus } from "./VoiceParticipant.js";
+
+/**
+ * A thread nothing was said in for this long counts as archived (dur.io)
+ */
+export const THREAD_ARCHIVE_AFTER = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Channel Class
@@ -252,17 +259,125 @@ export class Channel {
   }
 
   /**
-   * Default permissions for this server channel
+   * Default permissions for this server channel (a thread has its channel's)
    */
   get defaultPermissions(): { a: bigint; d: bigint } | undefined {
+    const parent = this.parent;
+    if (parent) return parent.defaultPermissions;
     return this.#collection.getUnderlyingObject(this.id).defaultPermissions;
   }
 
   /**
-   * Role permissions for this server channel
+   * Role permissions for this server channel (a thread has its channel's)
    */
   get rolePermissions(): Record<string, { a: bigint; d: bigint }> | undefined {
+    const parent = this.parent;
+    if (parent) return parent.rolePermissions;
     return this.#collection.getUnderlyingObject(this.id).rolePermissions;
+  }
+
+  /**
+   * What makes this channel a thread, if it is one (dur.io)
+   */
+  get threadInfo(): ThreadInfo | undefined {
+    return this.#collection.getUnderlyingObject(this.id).thread;
+  }
+
+  /**
+   * Whether this channel is a thread of another channel (dur.io)
+   */
+  get isThread(): boolean {
+    return !!this.threadInfo;
+  }
+
+  /**
+   * The channel this thread belongs to (dur.io)
+   */
+  get parent(): Channel | undefined {
+    const parentId = this.threadInfo?.parent;
+    return parentId ? this.#collection.get(parentId) : undefined;
+  }
+
+  /**
+   * The message in the parent channel this thread hangs off (dur.io)
+   */
+  get threadMessage(): Message | undefined {
+    const messageId = this.threadInfo?.message;
+    return messageId
+      ? this.#collection.client.messages.get(messageId)
+      : undefined;
+  }
+
+  /**
+   * Number of messages in this thread (dur.io)
+   */
+  get messageCount(): number {
+    return this.threadInfo?.message_count ?? 0;
+  }
+
+  /**
+   * Whether this thread is archived: by hand, or nothing was said in it for a
+   * week; a new message brings it back (dur.io)
+   */
+  get archived(): boolean {
+    if (!this.threadInfo) return false;
+    if (this.threadInfo.archived) return true;
+    return Date.now() - this.updatedAt.getTime() > THREAD_ARCHIVE_AFTER;
+  }
+
+  /**
+   * The threads of this channel, most recently active first (dur.io)
+   */
+  get threads(): Channel[] {
+    return this.#collection
+      .filter((channel) => channel.threadInfo?.parent === this.id)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
+  /**
+   * Start a thread in this channel (dur.io)
+   * @param name Thread name
+   * @param messageId Message of this channel to start it from; without one the
+   *  thread hangs off a new system message
+   * @returns The thread
+   */
+  async createThread(name: string, messageId?: string): Promise<Channel> {
+    const thread = await this.#collection.client.api.post(
+      `/channels/${this.id as ""}/threads`,
+      { name, message: messageId },
+    );
+
+    return this.#collection.getOrCreate(thread._id, thread, true);
+  }
+
+  /**
+   * Fetch the threads of this channel, archived ones too (dur.io)
+   * @returns Threads
+   */
+  async fetchThreads(): Promise<Channel[]> {
+    const threads = await this.#collection.client.api.get(
+      `/channels/${this.id as ""}/threads`,
+    );
+
+    return threads.map((thread) =>
+      this.#collection.getOrCreate(thread._id, thread),
+    );
+  }
+
+  /**
+   * Rename or archive this thread: its starter, or `ManageChannel` (dur.io)
+   * @param data Changes
+   */
+  async editThread(data: DataEditThread): Promise<void> {
+    const channel = await this.#collection.client.api.patch(
+      `/channels/${this.id as ""}/thread`,
+      data,
+    );
+
+    this.#collection.updateUnderlyingObject(
+      this.id,
+      hydrate("channel", channel, this.#collection.client, false),
+    );
   }
 
   /**

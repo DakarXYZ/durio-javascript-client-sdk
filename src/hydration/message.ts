@@ -5,6 +5,7 @@ import type {
   Masquerade,
   Message,
   MessageImport,
+  MessageSpoiler,
   Poll,
 } from "stoat-api";
 
@@ -45,6 +46,10 @@ export type HydratedMessage = {
   poll?: Poll;
   /** Where the message was imported from (dur.io) */
   imported?: MessageImport;
+  /** Id of the thread started from the message (dur.io) */
+  threadId?: string;
+  /** Set when a moderator hid the message behind a spoiler (dur.io) */
+  spoiler?: MessageSpoiler;
 };
 
 export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
@@ -57,6 +62,7 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
     mentions: "mentionIds",
     role_mentions: "roleMentionIds",
     replies: "replyIds",
+    thread: "threadId",
   },
   functions: {
     id: (message) => message._id,
@@ -102,6 +108,8 @@ export const messageHydration: Hydrate<Merge<Message>, HydratedMessage> = {
     encrypted: (message) => message.encrypted ?? undefined!,
     poll: (message) => message.poll ?? undefined!,
     imported: (message) => message.imported ?? undefined!,
+    threadId: (message) => message.thread ?? undefined!,
+    spoiler: (message) => message.spoiler ?? undefined!,
     e2ee: () => undefined!,
   },
   initialHydration: () => ({

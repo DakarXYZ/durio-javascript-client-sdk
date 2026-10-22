@@ -449,9 +449,30 @@ export async function handleEvent(
           delete changes.mentionIds;
         }
 
+        // dur.io: fields taken away (a pin, a thread, a spoiler)
+        for (const field of (event as { clear?: string[] }).clear ?? []) {
+          switch (field) {
+            case "Pinned":
+              changes.pinned = undefined;
+              break;
+            case "Thread":
+              changes.threadId = undefined;
+              break;
+            case "Spoiler":
+              changes.spoiler = undefined;
+              break;
+          }
+        }
+
+        // dur.io: only a new text counts as an edit, not a pin, vote, thread or spoiler
+        const edited =
+          "content" in event.data ||
+          "encrypted" in event.data ||
+          "edited" in event.data;
+
         client.messages.updateUnderlyingObject(event.id, {
           ...changes,
-          editedAt: new Date(),
+          ...(edited ? { editedAt: changes.editedAt ?? new Date() } : {}),
         });
 
         if (event.data.encrypted) client.e2ee.decryptor.queue(event.id);

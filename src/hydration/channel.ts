@@ -1,5 +1,9 @@
 import { ReactiveSet } from "@solid-primitives/set";
-import type { Channel as APIChannel, ChannelEncryption } from "stoat-api";
+import type {
+  Channel as APIChannel,
+  ChannelEncryption,
+  ThreadInfo,
+} from "stoat-api";
 
 import type { Client } from "../Client.js";
 import { File } from "../classes/File.js";
@@ -35,6 +39,9 @@ export type HydratedChannel = {
 
   /** Encryption of a DM or group (dur.io); irreversible */
   encryption?: ChannelEncryption;
+
+  /** Set when the channel is a thread of another one (dur.io) */
+  thread?: ThreadInfo;
 };
 
 export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
@@ -89,6 +96,7 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
           }
         : undefined,
     encryption: (channel) => channel.encryption ?? undefined,
+    thread: (channel) => channel.thread ?? undefined!,
   },
   initialHydration: () => ({
     typingIds: new ReactiveSet(),
