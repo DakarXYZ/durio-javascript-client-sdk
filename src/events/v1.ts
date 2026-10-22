@@ -624,6 +624,9 @@ export async function handleEvent(
               case "Slowmode":
                 changes["slowmode"] = 0;
                 break;
+              case "ThreadAutoDelete":
+                changes["threadAutoDelete"] = undefined;
+                break;
               case "Voice":
                 changes["voice"] = undefined;
                 break;

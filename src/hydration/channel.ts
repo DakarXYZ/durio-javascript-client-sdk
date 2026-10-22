@@ -42,6 +42,9 @@ export type HydratedChannel = {
 
   /** Set when the channel is a thread of another one (dur.io) */
   thread?: ThreadInfo;
+
+  /** Days without a message after which threads of the channel are deleted (dur.io) */
+  threadAutoDelete?: number;
 };
 
 export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
@@ -56,6 +59,7 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
     role_permissions: "rolePermissions",
     last_message_id: "lastMessageId",
     slowmode: "slowmode",
+    thread_auto_delete: "threadAutoDelete",
   },
   functions: {
     id: (channel) => channel._id,
@@ -97,6 +101,7 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
         : undefined,
     encryption: (channel) => channel.encryption ?? undefined,
     thread: (channel) => channel.thread ?? undefined!,
+    threadAutoDelete: (channel) => channel.thread_auto_delete ?? undefined!,
   },
   initialHydration: () => ({
     typingIds: new ReactiveSet(),

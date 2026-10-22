@@ -326,6 +326,40 @@ export class Channel {
   }
 
   /**
+   * Whether this thread was closed: only its starter or `ManageChannel` may
+   * write in it or open it again (dur.io)
+   */
+  get locked(): boolean {
+    return !!this.threadInfo?.locked;
+  }
+
+  /**
+   * Whether the current user may close, open, rename or archive this thread (dur.io)
+   */
+  get canManageThread(): boolean {
+    if (!this.threadInfo) return false;
+    return (
+      this.threadInfo.owner === this.#collection.client.user?.id ||
+      this.havePermission("ManageChannel")
+    );
+  }
+
+  /**
+   * Whether the current user may write in this thread right now (dur.io)
+   */
+  get canWriteInThread(): boolean {
+    return !this.locked || this.canManageThread;
+  }
+
+  /**
+   * Days without a message after which this channel's threads are deleted;
+   * undefined keeps them forever (dur.io)
+   */
+  get threadAutoDelete(): number | undefined {
+    return this.#collection.getUnderlyingObject(this.id).threadAutoDelete;
+  }
+
+  /**
    * The threads of this channel, most recently active first (dur.io)
    */
   get threads(): Channel[] {
@@ -365,7 +399,7 @@ export class Channel {
   }
 
   /**
-   * Rename or archive this thread: its starter, or `ManageChannel` (dur.io)
+   * Rename, archive or close this thread: its starter, or `ManageChannel` (dur.io)
    * @param data Changes
    */
   async editThread(data: DataEditThread): Promise<void> {
