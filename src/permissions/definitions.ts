@@ -125,6 +125,21 @@ export const DEFAULT_PERMISSION_VIEW_ONLY =
   Permission.ViewChannel + Permission.ReadMessageHistory;
 
 /**
+ * What the member who made a channel of their own may do in it (dur.io)
+ */
+export const USER_CHANNEL_OWNER =
+  DEFAULT_PERMISSION_VIEW_ONLY +
+  Permission.SendMessage +
+  Permission.ManageMessages +
+  Permission.ManageChannel +
+  Permission.ManagePermissions +
+  Permission.InviteOthers +
+  Permission.SendEmbeds +
+  Permission.UploadFiles +
+  Permission.React +
+  Permission.BypassSlowmode;
+
+/**
  * Default base permissions for channels
  */
 export const DEFAULT_PERMISSION =

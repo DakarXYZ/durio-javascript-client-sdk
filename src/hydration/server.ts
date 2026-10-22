@@ -33,6 +33,8 @@ export type HydratedServer = {
   analytics: boolean;
   discoverable: boolean;
   nsfw: boolean;
+  /** How many text channels of their own each member may make (dur.io) */
+  userChannelLimit: number;
   approximateMemberCount: number;
 };
 
@@ -44,6 +46,7 @@ export const serverHydration: Hydrate<APIServer, HydratedServer> = {
     system_messages: "systemMessages",
     default_permissions: "defaultPermissions",
     approximate_member_count: "approximateMemberCount",
+    user_channel_limit: "userChannelLimit",
   },
   functions: {
     id: (server) => server._id,
@@ -67,6 +70,7 @@ export const serverHydration: Hydrate<APIServer, HydratedServer> = {
     analytics: (server) => server.analytics || false,
     discoverable: (server) => server.discoverable || false,
     nsfw: (server) => server.nsfw || false,
+    userChannelLimit: (server) => server.user_channel_limit ?? 0,
     approximateMemberCount: (server) => server.approximate_member_count ?? 0,
   },
   initialHydration: () => ({

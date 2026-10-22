@@ -200,6 +200,35 @@ export class Server {
   }
 
   /**
+   * How many text channels of their own each member may make (dur.io)
+   */
+  get userChannelLimit(): number {
+    return this.#collection.getUnderlyingObject(this.id).userChannelLimit ?? 0;
+  }
+
+  /**
+   * Channels members made for themselves, by member (dur.io)
+   */
+  get userChannels(): Map<string, Channel[]> {
+    const byOwner = new Map<string, Channel[]>();
+    for (const channel of this.channels) {
+      const owner = channel.userChannelOwnerId;
+      if (owner) byOwner.set(owner, [...(byOwner.get(owner) ?? []), channel]);
+    }
+
+    return byOwner;
+  }
+
+  /**
+   * Whether the current user may make a text channel of their own here (dur.io)
+   */
+  get canMakeOwnChannel(): boolean {
+    const userId = this.#collection.client.user?.id;
+    if (!userId || this.havePermission("ManageChannel")) return false;
+    return (this.userChannels.get(userId)?.length ?? 0) < this.userChannelLimit;
+  }
+
+  /**
    * Approximate amount of members in this server
    */
   get approximateMemberCount(): number {

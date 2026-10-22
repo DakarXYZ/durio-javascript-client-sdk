@@ -277,6 +277,56 @@ export class Channel {
   }
 
   /**
+   * Permissions of single members in this server channel (a thread has its channel's) (dur.io)
+   */
+  get userPermissions(): Record<string, { a: bigint; d: bigint }> | undefined {
+    const parent = this.parent;
+    if (parent) return parent.userPermissions;
+    return this.#collection.getUnderlyingObject(this.id).userPermissions;
+  }
+
+  /**
+   * Id of the member who made this server channel for themselves (a thread has
+   * its channel's) (dur.io)
+   */
+  get userChannelOwnerId(): string | undefined {
+    const parent = this.parent;
+    if (parent) return parent.userChannelOwnerId;
+    if (this.type !== "TextChannel") return undefined;
+    return this.#collection.getUnderlyingObject(this.id).ownerId;
+  }
+
+  /**
+   * Set the permissions of one member in this channel (dur.io)
+   * @param userId Member
+   * @param permissions Allow and deny
+   */
+  async setUserPermissions(
+    userId: string,
+    permissions: { allow: bigint; deny: bigint },
+  ): Promise<void> {
+    await this.#collection.client.api.put(
+      `/channels/${this.id as ""}/permissions/users/${userId as ""}`,
+      {
+        permissions: {
+          allow: Number(permissions.allow),
+          deny: Number(permissions.deny),
+        },
+      },
+    );
+  }
+
+  /**
+   * Drop the permissions set for one member in this channel (dur.io)
+   * @param userId Member
+   */
+  async removeUserPermissions(userId: string): Promise<void> {
+    await this.#collection.client.api.delete(
+      `/channels/${this.id as ""}/permissions/users/${userId as ""}`,
+    );
+  }
+
+  /**
    * What makes this channel a thread, if it is one (dur.io)
    */
   get threadInfo(): ThreadInfo | undefined {

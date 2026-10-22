@@ -5,6 +5,7 @@ import {
   DEFAULT_PERMISSION_DIRECT_MESSAGE,
   DEFAULT_PERMISSION_VIEW_ONLY,
   Permission,
+  USER_CHANNEL_OWNER,
   UserPermission,
 } from "./definitions.js";
 
@@ -137,6 +138,26 @@ export function calculatePermission(
               if (override) {
                 perm = (perm | BigInt(override.a)) & ~BigInt(override.d);
               }
+            }
+          }
+
+          // dur.io: an override for this member alone
+          const own = target.userPermissions?.[user!.id];
+          if (own) {
+            perm = (perm | BigInt(own.a)) & ~BigInt(own.d);
+          }
+
+          // dur.io: a member's own channel is run by its maker, and the
+          // server's moderators keep there what they have on the server
+          const maker = target.userChannelOwnerId;
+          if (maker) {
+            if (maker === user?.id) {
+              perm |= USER_CHANNEL_OWNER;
+            }
+
+            const onServer = calculatePermission(client, server, options);
+            if (bitwiseAndEq(onServer, Permission.ManageChannel)) {
+              perm |= onServer | Permission.ViewChannel;
             }
           }
 

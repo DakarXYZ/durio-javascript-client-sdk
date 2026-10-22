@@ -45,6 +45,9 @@ export type HydratedChannel = {
 
   /** Days without a message after which threads of the channel are deleted (dur.io) */
   threadAutoDelete?: number;
+
+  /** Permissions of single members in a server channel (dur.io) */
+  userPermissions?: Record<string, { a: bigint; d: bigint }>;
 };
 
 export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
@@ -60,6 +63,7 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
     last_message_id: "lastMessageId",
     slowmode: "slowmode",
     thread_auto_delete: "threadAutoDelete",
+    user_permissions: "userPermissions",
   },
   functions: {
     id: (channel) => channel._id,
@@ -71,7 +75,7 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
     typingIds: () => new ReactiveSet(),
     recipientIds: (channel) => new ReactiveSet(channel.recipients),
     userId: (channel) => channel.user,
-    ownerId: (channel) => channel.owner,
+    ownerId: (channel) => channel.owner ?? undefined,
     serverId: (channel) => channel.server,
     permissions: (channel) => BigInt(channel.permissions!),
     defaultPermissions: (channel) => ({
@@ -102,6 +106,16 @@ export const channelHydration: Hydrate<Merge<APIChannel>, HydratedChannel> = {
     encryption: (channel) => channel.encryption ?? undefined,
     thread: (channel) => channel.thread ?? undefined!,
     threadAutoDelete: (channel) => channel.thread_auto_delete ?? undefined!,
+    userPermissions: (channel) =>
+      Object.fromEntries(
+        Object.entries(channel.user_permissions ?? {}).map(([k, v]) => [
+          k,
+          {
+            a: BigInt(v.a),
+            d: BigInt(v.d),
+          },
+        ]),
+      ),
   },
   initialHydration: () => ({
     typingIds: new ReactiveSet(),
